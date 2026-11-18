@@ -1,0 +1,28 @@
+# Secrets and local config. config.yaml is the operator's copy of config.example.yaml.
+.env
+config.yaml
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+
+# Runtime data
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+buffer/
+clips/
+listos_para_subir/
+telegram_chat.json
+
+# OS
+.DS_Store
+Thumbs.db

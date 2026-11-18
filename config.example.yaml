@@ -1,0 +1,93 @@
+# ClipHunter — fase 1
+# Copia este archivo a config.yaml y edítalo.
+# Solo se vigilan los canales con authorized: true.
+# Al arrancar, el programa pregunta una vez por canal si está autorizado
+# antes de grabar. Para saltarte la pregunta: --yes, o pon
+# skip_authorization_prompt: true, o CLIPHUNTER_SKIP_AUTH_PROMPT=1.
+
+max_concurrent_streams: 2
+# En Windows se usa tal cual. En Linux/macOS una ruta con letra de unidad
+# se redirige a ~/cliphunter/<último directorio> para poder probar el ejemplo.
+buffer_dir: 'C:\cliphunter\buffer'
+buffer_minutes: 10
+segment_seconds: 4
+# Preferencia de menor a mayor. Si ninguna existe, se usa "worst"
+# (la calidad más baja) para no saltar a 1080p.
+quality:
+  - 480p
+  - 720p
+# Recomendado: entre 30 y 60 segundos.
+poll_interval_seconds: 45
+# El modo principal es automático: cada 2 s se puntúa una ventana de 10 s.
+# El atajo solo es un extra. --no-hotkey lo apaga y la detección sigue.
+auto_clip: true
+signal_window_seconds: 10
+signal_interval_seconds: 2
+baseline_minutes: 10
+clip_min_seconds: 15
+clip_max_seconds: 45
+clip_target_seconds: 30
+clip_pre_roll_seconds: 8
+hysteresis: 0.65
+transcript_on_trigger: true
+whisper_model: base
+# Atajo opcional. Corta hotkey_seconds del canal activo (peso de calibración 3).
+hotkey: "ctrl+alt+c"
+hotkey_seconds: 45
+hotkey_debounce_seconds: 3
+# active_channel: TuCanal
+skip_authorization_prompt: false
+metrics_interval_seconds: 15
+log_level: INFO
+
+# Aún no se dibuja. Al aprobar, una fase posterior quema este título
+# en el 9:16: caja blanca redondeada arriba, texto negro en negrita,
+# y el nombre de {sujeto} (lo devuelve Claude) resaltado en amarillo.
+title_style:
+  box_color: white
+  text_color: black
+  highlight_color: yellow
+  highlight_mode: background
+  font: "Montserrat Black"
+  font_file: assets/fonts/Montserrat-Black.ttf
+  position: top
+  corner_radius: 16
+  title_format: "*{sujeto}* {resto}"
+  renderer: ass
+
+channels:
+  # Cambia authorized a true solo si puedes grabar este canal.
+  - platform: youtube
+    handle: "@TuCanal"
+    authorized: false
+    context: "Canal de variedades en español. Momentos de humor y reacciones."
+    weights:
+      humor: 1.0
+      reaccion: 0.8
+      hype: 0.5
+    thresholds:
+      # signal_score es el umbral del z-score automático. clip_score queda para el scorer.
+      signal_score: 2.5
+      cooldown_s: 45
+      clip_score: 0.7
+
+  - platform: twitch
+    handle: "tucanal"
+    authorized: false
+    context: "English-language FPS streamer. Clutch rounds and funny fails."
+    weights:
+      clutch: 1.0
+      fail: 0.7
+    thresholds:
+      signal_score: 2.5
+      cooldown_s: 45
+      clip_score: 0.65
+
+  # Kick está en stub en la fase 1: no graba aunque authorized sea true.
+  - platform: kick
+    handle: "tucanal"
+    url: "https://kick.com/tucanal"
+    authorized: false
+    context: "Canal de ejemplo. Kick no está implementado en la fase 1."
+    weights: {}
+    thresholds: {}
