@@ -26,6 +26,7 @@ channels:
     platform: youtube
     url: "https://www.youtube.com/@Alofokeradioshow"
     authorized: true
+    credit: "🎙️ @Alofokeradioshow"
     authorization:
       tipo: "permiso público del creador"
       fuente: "https://www.instagram.com/p/DekQ6nYKdhy/"

@@ -15,6 +15,7 @@ class EnvSettings:
     twitch_client_id: str | None = None
     twitch_client_secret: str | None = None
     anthropic_api_key: str | None = None
+    telegram_bot_token: str | None = None
 
 
 def _clean(name: str) -> str | None:
@@ -37,4 +38,5 @@ def load_env(path: Path | None = None) -> EnvSettings:
         twitch_client_id=_clean("TWITCH_CLIENT_ID"),
         twitch_client_secret=_clean("TWITCH_CLIENT_SECRET"),
         anthropic_api_key=_clean("ANTHROPIC_API_KEY"),
+        telegram_bot_token=_clean("TELEGRAM_BOT_TOKEN"),
     )

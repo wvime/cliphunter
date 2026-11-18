@@ -81,16 +81,20 @@ def default_clip_path(clips_dir: Path, key: str) -> Path:
     return clips_dir / f"{key}_{stamp}.mp4"
 
 
-def plan_clip(index: SegmentIndex, seconds: float) -> ClipPlan:
-    if seconds <= 0:
-        raise ClipError("--ultimos tiene que ser mayor que 0.")
-    selected = index.select_last(seconds)
+def plan_from_segments(
+    index: SegmentIndex,
+    selected: list[Segment],
+    *,
+    requested_seconds: float | None = None,
+) -> ClipPlan:
     if not selected:
         raise ClipError(
             "El buffer no tiene segmentos cerrados para ese canal. "
             "Espera unos segundos a que ffmpeg cierre el primer segmento."
         )
     source_duration = sum(segment.duration for segment in selected)
+    if requested_seconds is None:
+        requested_seconds = source_duration
     newest = selected[-1]
     oldest = selected[0]
     session_ids = {segment.session_id for segment in selected}
@@ -102,7 +106,7 @@ def plan_clip(index: SegmentIndex, seconds: float) -> ClipPlan:
         "channel_context": index.session.get("context") or "",
         "clip_start": oldest.wall_start,
         "clip_end": newest.wall_end,
-        "requested_seconds": seconds,
+        "requested_seconds": requested_seconds,
         "actual_seconds": round(source_duration, 3),
         "source_duration_seconds": round(source_duration, 3),
         "precision": "keyframe-segment",
@@ -112,7 +116,7 @@ def plan_clip(index: SegmentIndex, seconds: float) -> ClipPlan:
             "(ffmpeg corta en el keyframe más cercano, no en el frame exacto). "
             "El segmento que todavía se está escribiendo no entra."
         ),
-        "short_buffer": source_duration + 1e-3 < seconds,
+        "short_buffer": source_duration + 1e-3 < requested_seconds,
         "spans_multiple_sessions": len(session_ids) > 1,
         "session_id": newest.session_id,
         "source_segments": [segment.file for segment in selected],
@@ -129,6 +133,12 @@ def plan_clip(index: SegmentIndex, seconds: float) -> ClipPlan:
         escaped = path.as_posix().replace("'", "'\\''")
         lines.append(f"file '{escaped}'")
     return ClipPlan(selected=selected, attribution=attribution, concat_lines=lines)
+
+
+def plan_clip(index: SegmentIndex, seconds: float) -> ClipPlan:
+    if seconds <= 0:
+        raise ClipError("--ultimos tiene que ser mayor que 0.")
+    return plan_from_segments(index, index.select_last(seconds), requested_seconds=seconds)
 
 
 def _mux_command(concat: Path, output: Path, *, bitstream_filter: bool) -> list[str]:
@@ -220,6 +230,9 @@ async def create_clip(
     channel_id: int | None = None,
     authorization: dict | None = None,
     weight: float | None = None,
+    credit: str | None = None,
+    status: str = "ready",
+    breakdown: dict | None = None,
 ) -> ClipResult:
     if not index_path.exists():
         raise ClipError(
@@ -227,8 +240,13 @@ async def create_clip(
         )
     index = SegmentIndex.load(index_path)
     plan = plan_clip(index, seconds)
+    plan.attribution["buffer_index"] = str(index_path.resolve())
     if authorization:
         plan.attribution["authorization"] = authorization
+    if credit:
+        plan.attribution["credit"] = credit
+    if breakdown is not None:
+        plan.attribution["breakdown"] = breakdown
     if weight is not None:
         plan.attribution["calibration_weight"] = weight
     duration = await mux_plan(plan, output)
@@ -246,11 +264,12 @@ async def create_clip(
             channel_id=channel_id,
             session_id=session_id,
             kind="manual",
-            status="ready",
+            status=status,
             attribution=plan.attribution,
             file_path=str(output.resolve()),
             duration_seconds=duration,
             weight=weight,
+            breakdown=breakdown,
         )
         plan.attribution["clip_id"] = clip_id
         atomic_write_json(sidecar, plan.attribution)

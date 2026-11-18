@@ -58,6 +58,13 @@ def build_parser() -> argparse.ArgumentParser:
     init_db = sub.add_parser("init-db", help="Crea el SQLite si todavía no existe.")
     init_db.add_argument("--config", default="config.yaml")
 
+    setup = sub.add_parser(
+        "telegram-setup",
+        help="Espera un /start de @clipowii_bot y guarda el chat id permitido.",
+    )
+    setup.add_argument("--config", default="config.yaml")
+    setup.add_argument("--env", default=".env")
+
     sub.add_parser("doctor", help="Comprueba Python, ffmpeg y streamlink.")
     sub.add_parser("replay", help="Fase posterior: volver a puntuar un buffer.")
     sub.add_parser("calibrate", help="Fase posterior: ajustar umbrales con las decisiones.")
@@ -80,6 +87,8 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(_cmd_clip(args))
         if args.command == "init-db":
             return asyncio.run(_cmd_init_db(args))
+        if args.command == "telegram-setup":
+            return asyncio.run(_cmd_telegram_setup(args))
         if args.command == "doctor":
             return doctor()
         if args.command == "replay":
@@ -98,6 +107,32 @@ def main(argv: list[str] | None = None) -> int:
     return 2
 
 
+async def _queue_review(config, env, repo) -> None:
+    from cliphunter.review.service import build_review_runtime
+
+    review = build_review_runtime(repo=repo, config=config, env=env, enable_local=False)
+    try:
+        await review.scan_once()
+    except Exception as exc:
+        log_event("WARNING", "review.submit_failed", error=str(exc))
+
+
+async def _cmd_telegram_setup(args: argparse.Namespace) -> int:
+    from cliphunter.review.state import state_path
+    from cliphunter.review.telegram import HttpxTelegram, wait_for_start
+
+    config = load_config(Path(args.config))
+    env = load_env(Path(args.env))
+    if not env.telegram_bot_token:
+        print("Falta TELEGRAM_BOT_TOKEN en .env.", file=sys.stderr)
+        return 2
+    print("Abre Telegram, busca @clipowii_bot y envía /start. Esperando…")
+    chat_id = await wait_for_start(HttpxTelegram(env.telegram_bot_token), state_path(config))
+    print(f"Chat autorizado: {chat_id}")
+    print(f"Guardado en {state_path(config)}")
+    return 0
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     config = load_config(Path(args.config))
     env = load_env(Path(args.env))
@@ -109,6 +144,7 @@ async def _cmd_clip(args: argparse.Namespace) -> int:
     if args.ultimos <= 0:
         raise ClipError("--ultimos tiene que ser mayor que 0.")
     config = load_config(Path(args.config))
+    env = load_env()
     channel = find_channel(config, args.canal)
     key = channel_key(channel)
     output = Path(args.output) if args.output else default_clip_path(config.resolved_clips_dir(), key)
@@ -132,7 +168,10 @@ async def _cmd_clip(args: argparse.Namespace) -> int:
             repo=repo,
             channel_id=channel_id,
             authorization=channel.authorization_payload(),
+            credit=channel.credit,
+            status="pending",
         )
+        await _queue_review(config, env, repo)
     finally:
         await repo.close()
     print(f"Clip guardado en {result.path}")

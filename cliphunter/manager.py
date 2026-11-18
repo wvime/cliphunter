@@ -68,6 +68,7 @@ class IngestManager:
                     session_id=session.session_id,
                     channel_db_id=int(session.session_meta.get("channel_id") or 0),
                     authorization=session.session_meta.get("authorization"),
+                    credit=session.session_meta.get("credit"),
                 )
             )
         return streams
@@ -206,6 +207,7 @@ class IngestManager:
             "context": payload.get("context") or "",
             "context_fields": payload.get("context_fields") or {},
             "authorization": payload.get("authorization"),
+            "credit": payload.get("credit"),
             "emotes_hype": payload.get("emotes_hype") or [],
             "started_at": utc_iso(),
             "confirmed_authorized_at": confirmed,

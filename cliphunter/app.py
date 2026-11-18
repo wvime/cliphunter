@@ -13,6 +13,7 @@ from cliphunter.bus import InMemoryEventBus
 from cliphunter.config import AppConfig, ChannelConfig, channel_key
 from cliphunter.env import EnvSettings
 from cliphunter.hotkey import HotkeyClipper, HotkeyService
+from cliphunter.review.service import build_review_runtime
 from cliphunter.jsonlog import log_event, set_level
 from cliphunter.manager import IngestManager
 from cliphunter.observability import MetricsSampler
@@ -127,6 +128,8 @@ async def run_app(
             bus=bus,
         )
         _install_signals(stop)
+        review = build_review_runtime(repo=repo, config=config, env=env, enable_local=True)
+        review_task = asyncio.create_task(review.run(stop), name="review")
         hotkey: HotkeyService | None = None
         if hotkey_enabled:
             clipper = HotkeyClipper(
@@ -135,6 +138,7 @@ async def run_app(
                 preferred=config.active_channel,
                 repo=repo,
                 clips_dir=config.resolved_clips_dir(),
+                on_created=lambda _result: _wake(review),
             )
             hotkey = HotkeyService(
                 combo=config.hotkey,
@@ -175,15 +179,22 @@ async def run_app(
             if hotkey is not None:
                 await hotkey.aclose()
             stop.set()
+            review_task.cancel()
             watcher_task.cancel()
             metrics_task.cancel()
-            await asyncio.gather(watcher_task, metrics_task, return_exceptions=True)
+            await asyncio.gather(review_task, watcher_task, metrics_task, return_exceptions=True)
             await manager_task
         log_event("INFO", "app.stop")
     finally:
         await client.aclose()
         await repo.close()
     return 0
+
+
+async def _wake(review: object) -> None:
+    wake = getattr(review, "wake", None)
+    if wake is not None:
+        wake()
 
 
 async def _supervise(name: str, coro: object, stop: asyncio.Event) -> None:

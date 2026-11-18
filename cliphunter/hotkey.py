@@ -43,6 +43,7 @@ class ActiveStream:
     session_id: int
     channel_db_id: int
     authorization: dict | None
+    credit: str | None = None
 
 
 def to_pynput_hotkey(spec: str) -> str:
@@ -246,6 +247,7 @@ class HotkeyClipper:
         repo: Repo,
         clips_dir: Path,
         notifier: Notifier = notify_user,
+        on_created: Callable[[ClipResult], Awaitable[None]] | None = None,
     ) -> None:
         self.streams = streams
         self.seconds = seconds
@@ -253,6 +255,7 @@ class HotkeyClipper:
         self.repo = repo
         self.clips_dir = clips_dir
         self.notifier = notifier
+        self.on_created = on_created
 
     async def __call__(self) -> ClipResult | None:
         chosen = select_active_stream(self.streams(), self.preferred)
@@ -270,6 +273,8 @@ class HotkeyClipper:
                 channel_id=chosen.channel_db_id,
                 authorization=chosen.authorization,
                 weight=HOTKEY_CALIBRATION_WEIGHT,
+                credit=chosen.credit,
+                status="pending",
             )
         except ClipError as exc:
             self.notifier("ClipHunter", str(exc))
@@ -295,4 +300,9 @@ class HotkeyClipper:
             weight=HOTKEY_CALIBRATION_WEIGHT,
             kind="manual",
         )
+        if self.on_created is not None:
+            try:
+                await self.on_created(result)
+            except Exception as exc:
+                log_event("WARNING", "review.wake_failed", error=str(exc))
         return result

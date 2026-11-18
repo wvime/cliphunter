@@ -141,6 +141,7 @@ def test_alofoke_example_authorization_reaches_clip_attribution(tmp_path: Path):
     assert channel.url == "https://www.youtube.com/@Alofokeradioshow"
     assert channel_key(channel) == "youtube_alofoke"
     assert channel.display_name == "alofoke"
+    assert channel.credit == "🎙️ @Alofokeradioshow"
     assert channel.authorization_payload() == {
         "tipo": "permiso público del creador",
         "fuente": "https://www.instagram.com/p/DekQ6nYKdhy/",

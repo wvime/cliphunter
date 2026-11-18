@@ -20,6 +20,8 @@ build/
 *.sqlite-shm
 buffer/
 clips/
+listos_para_subir/
+telegram_chat.json
 
 # OS
 .DS_Store

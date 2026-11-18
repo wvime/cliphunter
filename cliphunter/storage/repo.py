@@ -14,10 +14,19 @@ from cliphunter.timeutil import utc_iso
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 
+_COLUMN_PATCHES = {
+    ("clips", "weight"): "REAL",
+    ("clips", "review_claimed"): "INTEGER NOT NULL DEFAULT 0",
+    ("decisions", "weight"): "REAL",
+    ("decisions", "breakdown_json"): "TEXT",
+}
+
+
 async def _ensure_column(db: aiosqlite.Connection, table: str, column: str, ddl: str) -> None:
     """Add a column when an older database file is opened again."""
 
-    if table not in {"clips", "decisions"} or column != "weight" or ddl != "REAL":
+    expected = _COLUMN_PATCHES.get((table, column))
+    if expected != ddl:
         raise ValueError(f"unsupported schema patch {table}.{column}")
     cursor = await db.execute(f"PRAGMA table_info({table})")
     rows = await cursor.fetchall()
@@ -92,7 +101,24 @@ class Repo(Protocol):
         adjust_seconds: float | None = None,
         note: str | None = None,
         weight: float | None = None,
+        breakdown: dict[str, Any] | None = None,
     ) -> int: ...
+
+    async def get_clip(self, clip_id: int) -> dict[str, Any] | None: ...
+
+    async def update_clip(
+        self,
+        clip_id: int,
+        *,
+        status: str | None = None,
+        attribution: dict[str, Any] | None = None,
+        file_path: str | None = None,
+        duration_seconds: float | None = None,
+    ) -> None: ...
+
+    async def claim_review(self, clip_id: int) -> bool: ...
+
+    async def release_review(self, clip_id: int) -> None: ...
 
     async def list_decisions(self, clip_id: int | None = None) -> list[dict[str, Any]]: ...
 
@@ -134,8 +160,8 @@ class SqliteRepo:
         async with self._lock:
             db = await self._connect()
             await db.executescript(schema)
-            await _ensure_column(db, "clips", "weight", "REAL")
-            await _ensure_column(db, "decisions", "weight", "REAL")
+            for (table, column), ddl in _COLUMN_PATCHES.items():
+                await _ensure_column(db, table, column, ddl)
             await db.execute("PRAGMA journal_mode=WAL")
             await db.execute("PRAGMA foreign_keys=ON")
             await db.execute("PRAGMA busy_timeout=5000")
@@ -351,15 +377,25 @@ class SqliteRepo:
         adjust_seconds: float | None = None,
         note: str | None = None,
         weight: float | None = None,
+        breakdown: dict[str, Any] | None = None,
     ) -> int:
         async with self._lock:
             db = await self._connect()
             cursor = await db.execute(
                 """
-                INSERT INTO decisions (clip_id, action, adjust_seconds, note, weight, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO decisions (
+                    clip_id, action, adjust_seconds, note, weight, breakdown_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (clip_id, action, adjust_seconds, note, weight, utc_iso()),
+                (
+                    clip_id,
+                    action,
+                    adjust_seconds,
+                    note,
+                    weight,
+                    _dumps(breakdown) if breakdown is not None else None,
+                    utc_iso(),
+                ),
             )
             await db.commit()
             if cursor.lastrowid is None:
@@ -419,6 +455,64 @@ class SqliteRepo:
                 )
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
+
+    async def get_clip(self, clip_id: int) -> dict[str, Any] | None:
+        async with self._lock:
+            db = await self._connect()
+            cursor = await db.execute("SELECT * FROM clips WHERE id = ?", (clip_id,))
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def update_clip(
+        self,
+        clip_id: int,
+        *,
+        status: str | None = None,
+        attribution: dict[str, Any] | None = None,
+        file_path: str | None = None,
+        duration_seconds: float | None = None,
+    ) -> None:
+        sets: list[str] = []
+        params: list[Any] = []
+        if status is not None:
+            sets.append("status = ?")
+            params.append(status)
+        if attribution is not None:
+            sets.append("attribution_json = ?")
+            params.append(_dumps(attribution))
+        if file_path is not None:
+            sets.append("file_path = ?")
+            params.append(file_path)
+        if duration_seconds is not None:
+            sets.append("duration_seconds = ?")
+            params.append(duration_seconds)
+        if not sets:
+            return
+        params.append(clip_id)
+        async with self._lock:
+            db = await self._connect()
+            await db.execute(f"UPDATE clips SET {', '.join(sets)} WHERE id = ?", params)
+            await db.commit()
+
+    async def claim_review(self, clip_id: int) -> bool:
+        async with self._lock:
+            db = await self._connect()
+            cursor = await db.execute(
+                """
+                UPDATE clips
+                SET review_claimed = 1
+                WHERE id = ? AND review_claimed = 0 AND status = 'pending'
+                """,
+                (clip_id,),
+            )
+            await db.commit()
+            return (cursor.rowcount or 0) == 1
+
+    async def release_review(self, clip_id: int) -> None:
+        async with self._lock:
+            db = await self._connect()
+            await db.execute("UPDATE clips SET review_claimed = 0 WHERE id = ?", (clip_id,))
+            await db.commit()
 
     async def list_decisions(self, clip_id: int | None = None) -> list[dict[str, Any]]:
         async with self._lock:

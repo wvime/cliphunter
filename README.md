@@ -202,6 +202,28 @@ Al cortar verás una línea `[cliphunter]` en la consola. En Windows, si instala
 pip install plyer
 ```
 
+## Revisión por Telegram
+
+El bot es **@clipowii_bot**. El token va en `.env` como `TELEGRAM_BOT_TOKEN` (no se commitea).
+
+1. Arranca la vinculación y, en el teléfono, abre el bot y envía `/start`:
+
+```powershell
+python -m cliphunter telegram-setup --config config.yaml
+```
+
+Eso guarda el chat id en `telegram_chat.json`, al lado de la base. Solo se aceptan botones de ese chat.
+
+2. Con `run` en marcha, cada clip manual (atajo o `clip`) entra en cola (`status=pending`). El proceso hace long polling: no hace falta un webhook público. El mensaje lleva el mp4, una leyenda (canal, marcas de tiempo, score y breakdown si existen) y los botones **Aprobar**, **Rechazar**, **Ajustar -5s inicio**, **Ajustar +5s inicio**, **Ajustar -5s fin** y **Ajustar +5s fin**.
+
+3. Un ajuste vuelve a cortar el buffer **sin re-encode** (segmentos enteros, así que puede pasarse de 5 s) y reenvía la vista previa. Cada decisión queda en `decisions` con los segundos del ajuste y el breakdown de la señal, si lo hay.
+
+4. **Aprobar** copia el mp4 a `listos_para_subir` (junto al buffer, por ejemplo `C:\cliphunter\listos_para_subir`) y escribe un `.txt` con `title`, `hook` y `hashtags` vacíos por ahora, más la línea de crédito del canal. En Alofoke es `🎙️ @Alofokeradioshow`. Los subtítulos, el 9:16 y Claude llegan después.
+
+Si el mp4 pesa más de 50 MB, solo la copia que se manda a Telegram se baja a 480p con un ffmpeg de un hilo. El archivo que apruebas sigue siendo el original.
+
+Si no hay token o chat id, o Telegram no responde, la grabación no se para. En ese caso la cola también está en `http://127.0.0.1:8765` (solo esta máquina), con los mismos botones y un aviso en la consola. El puerto se cambia con `review_port`.
+
 Nada se graba de un canal con `authorized: false`.
 
 Como mucho hay 2 ingestas a la vez (`max_concurrent_streams`, entre 1 y 2). Un tercero en directo espera hueco. Si una ingesta falla, reintenta con espera exponencial (1 s, 2 s, 4 s… hasta 60 s, con un poco de jitter) y **no** tumba al otro directo. Tras unos 30 s sanos, la espera vuelve a empezar en 1 s. streamlink solo reintenta un par de veces (`--retry-max 2`); la espera larga la lleva ClipHunter, para que un directo caído no deje el proceso colgado.
@@ -281,7 +303,7 @@ Eventos ya publicados: `stream.start`, `stream.end`, `segment.ready`, `clip.crea
 | Kick (`platforms/kick.py`) | Stub, misma interfaz |
 | `signals/` | Interfaz `SignalDetector`. Nadie la llama todavía |
 | `scoring.py` (`ClaudeScorer`) | Interfaz. No hay llamadas a Anthropic |
-| `review/` | Interfaz `ReviewBackend` (approve / reject / adjust) |
+| `review/` | Telegram (@clipowii_bot) y página local en `127.0.0.1`. El 9:16 y Claude siguen después |
 | `processing/` | Interfaz `reframe_vertical` (9:16) |
 | `replay`, `calibrate` | Comandos que explican que llegan después |
 

@@ -139,7 +139,7 @@ def test_simulated_live_stream_can_be_clipped_from_the_cli(tmp_path: Path, capsy
     rows = asyncio.run(_rows())
     assert len(rows) == 1
     assert rows[0]["kind"] == "manual"
-    assert rows[0]["status"] == "ready"
+    assert rows[0]["status"] == "pending"
     stored = json.loads(rows[0]["attribution_json"])
     assert stored["streamer"] == "Tester"
     assert stored["platform"] == "youtube"

@@ -126,6 +126,7 @@ class Watcher:
             "weights": channel.weights,
             "thresholds": channel.thresholds,
             "authorization": channel.authorization_payload(),
+            "credit": channel.credit,
             "emotes_hype": list(channel.emotes_hype),
         }
 

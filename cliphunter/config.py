@@ -108,6 +108,7 @@ class ChannelConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     id: str | None = None
+    credit: str | None = None
     platform: Literal["youtube", "twitch", "kick"]
     handle: str | None = None
     url: str | None = None
@@ -119,7 +120,7 @@ class ChannelConfig(BaseModel):
     thresholds: dict[str, float] = Field(default_factory=dict)
     emotes_hype: list[str] = Field(default_factory=list)
 
-    @field_validator("id", "handle", "url", mode="before")
+    @field_validator("id", "handle", "url", "credit", mode="before")
     @classmethod
     def _blank_to_none(cls, value: object) -> object:
         if value is None:
@@ -215,6 +216,7 @@ class AppConfig(BaseModel):
     hotkey_seconds: float = Field(default=45, gt=0, le=600)
     hotkey_debounce_seconds: float = Field(default=3, ge=0, le=60)
     active_channel: str | None = None
+    review_port: int = Field(default=8765, ge=1024, le=65535)
     database_path: Path | None = None
     clips_dir: Path | None = None
     channels: list[ChannelConfig] = Field(default_factory=list)
@@ -291,6 +293,9 @@ class AppConfig(BaseModel):
         if self.clips_dir is not None:
             return self.clips_dir
         return self.buffer_dir.parent / "clips"
+
+    def resolved_ready_dir(self) -> Path:
+        return self.buffer_dir.parent / "listos_para_subir"
 
 
 def load_config(path: Path) -> AppConfig:
