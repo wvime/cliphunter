@@ -43,6 +43,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="No pregunta autorización. Para tareas no interactivas: confirma los canales con authorized: true.",
     )
     run.add_argument("--env", default=".env", help="Archivo .env con las claves. Por defecto .env.")
+    run.add_argument(
+        "--no-hotkey",
+        action="store_true",
+        help="No registra el atajo global (por defecto Ctrl+Alt+C).",
+    )
 
     clip = sub.add_parser("clip", help="Corta los últimos N segundos del buffer de un canal.")
     clip.add_argument("--canal", required=True, help="Handle o clave del canal, por ejemplo TuCanal.")
@@ -97,7 +102,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     config = load_config(Path(args.config))
     env = load_env(Path(args.env))
     plan = prepare_run(config, skip_flag=args.yes)
-    return asyncio.run(run_app(config, env, plan))
+    return asyncio.run(run_app(config, env, plan, hotkey_enabled=not args.no_hotkey))
 
 
 async def _cmd_clip(args: argparse.Namespace) -> int:

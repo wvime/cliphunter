@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS clips (
     attribution_json TEXT NOT NULL,
     file_path TEXT,
     duration_seconds REAL,
+    weight REAL,
     created_at TEXT NOT NULL,
     CHECK (kind IN ('manual', 'auto')),
     CHECK (status IN ('pending', 'ready', 'failed', 'approved', 'rejected'))
@@ -53,6 +54,7 @@ CREATE TABLE IF NOT EXISTS decisions (
     action TEXT NOT NULL,
     adjust_seconds REAL,
     note TEXT,
+    weight REAL,
     created_at TEXT NOT NULL,
     CHECK (action IN ('approve', 'reject', 'adjust'))
 );

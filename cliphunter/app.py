@@ -12,6 +12,7 @@ from cliphunter.authprompt import AuthorizationRequired, collect_confirmations, 
 from cliphunter.bus import InMemoryEventBus
 from cliphunter.config import AppConfig, ChannelConfig, channel_key
 from cliphunter.env import EnvSettings
+from cliphunter.hotkey import HotkeyClipper, HotkeyService
 from cliphunter.jsonlog import log_event, set_level
 from cliphunter.manager import IngestManager
 from cliphunter.observability import MetricsSampler
@@ -51,7 +52,13 @@ def prepare_run(config: AppConfig, *, skip_flag: bool) -> RunPlan:
     return RunPlan(channels=channels, confirmations=confirmations)
 
 
-async def run_app(config: AppConfig, env: EnvSettings, plan: RunPlan) -> int:
+async def run_app(
+    config: AppConfig,
+    env: EnvSettings,
+    plan: RunPlan,
+    *,
+    hotkey_enabled: bool = True,
+) -> int:
     set_level(config.log_level)
     config.buffer_dir.mkdir(parents=True, exist_ok=True)
     config.resolved_clips_dir().mkdir(parents=True, exist_ok=True)
@@ -120,6 +127,28 @@ async def run_app(config: AppConfig, env: EnvSettings, plan: RunPlan) -> int:
             bus=bus,
         )
         _install_signals(stop)
+        hotkey: HotkeyService | None = None
+        if hotkey_enabled:
+            clipper = HotkeyClipper(
+                streams=manager.live_streams,
+                seconds=float(config.hotkey_seconds),
+                preferred=config.active_channel,
+                repo=repo,
+                clips_dir=config.resolved_clips_dir(),
+            )
+            hotkey = HotkeyService(
+                combo=config.hotkey,
+                debounce_s=float(config.hotkey_debounce_seconds),
+                on_fire=clipper,
+            )
+            if not hotkey.start():
+                log_event(
+                    "WARNING",
+                    "hotkey.disabled",
+                    reason="no se pudo registrar el atajo; la grabación sigue sin él",
+                )
+        else:
+            log_event("INFO", "hotkey.disabled", reason="--no-hotkey")
         log_event(
             "INFO",
             "app.start",
@@ -129,6 +158,8 @@ async def run_app(config: AppConfig, env: EnvSettings, plan: RunPlan) -> int:
             buffer_minutes=config.buffer_minutes,
             segment_seconds=config.segment_seconds,
             poll_interval_seconds=config.poll_interval_seconds,
+            hotkey=config.hotkey if hotkey_enabled else None,
+            hotkey_seconds=config.hotkey_seconds,
             database=str(config.resolved_database_path()),
             youtube_api_configured=bool(env.youtube_api_key),
             twitch_configured=bool(env.twitch_client_id and env.twitch_client_secret),
@@ -141,6 +172,8 @@ async def run_app(config: AppConfig, env: EnvSettings, plan: RunPlan) -> int:
         try:
             await stop.wait()
         finally:
+            if hotkey is not None:
+                await hotkey.aclose()
             stop.set()
             watcher_task.cancel()
             metrics_task.cancel()

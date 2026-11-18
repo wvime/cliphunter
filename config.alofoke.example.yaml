@@ -15,6 +15,11 @@ buffer_minutes: 10
 segment_seconds: 4
 quality: "480p,720p"
 poll_interval_seconds: 45
+hotkey: "ctrl+alt+c"
+hotkey_seconds: 45
+hotkey_debounce_seconds: 3
+# Con dos directos, el atajo corta este. Si solo hay uno, da igual.
+active_channel: alofoke
 
 channels:
   - id: alofoke

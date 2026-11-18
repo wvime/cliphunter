@@ -219,6 +219,7 @@ async def create_clip(
     repo: Repo | None = None,
     channel_id: int | None = None,
     authorization: dict | None = None,
+    weight: float | None = None,
 ) -> ClipResult:
     if not index_path.exists():
         raise ClipError(
@@ -228,6 +229,8 @@ async def create_clip(
     plan = plan_clip(index, seconds)
     if authorization:
         plan.attribution["authorization"] = authorization
+    if weight is not None:
+        plan.attribution["calibration_weight"] = weight
     duration = await mux_plan(plan, output)
     plan.attribution["file_path"] = str(output.resolve())
     sidecar = output.with_suffix(".json")
@@ -247,6 +250,7 @@ async def create_clip(
             attribution=plan.attribution,
             file_path=str(output.resolve()),
             duration_seconds=duration,
+            weight=weight,
         )
         plan.attribution["clip_id"] = clip_id
         atomic_write_json(sidecar, plan.attribution)

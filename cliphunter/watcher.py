@@ -113,6 +113,7 @@ class Watcher:
     def _start_payload(self, channel: ChannelConfig, status: LiveStatus, video: str) -> dict:
         return {
             "channel_key": channel_key(channel),
+            "channel_id": channel.id,
             "platform": channel.platform,
             "handle": channel.handle,
             "channel_url": channel.url,

@@ -171,6 +171,37 @@ La pregunta se hace **una vez por canal al lanzar el proceso**, antes de grabar.
 
 Para el proceso con Ctrl+C. Así manda `terminate()` a streamlink y a ffmpeg. Si matas el proceso a la fuerza, esos hijos pueden quedarse un rato hasta que el sistema los cierre.
 
+## Atajo de teclado
+
+Con `run` en marcha, **Ctrl+Alt+C** corta el directo activo. Usa el mismo camino que `clip` (ffmpeg `-c copy`, sin re-encode) y guarda el mp4 con `kind=manual`. Además anota un peso de calibración **3.0** en la fila del clip y en `decisions` (`action=approve`, `note=hotkey`), para que más adelante pese más que un corte automático.
+
+- Si solo hay un directo, corta ese.
+- Si hay dos, corta `active_channel` cuando está puesto (en el ejemplo de Alofoke es `alofoke`). Si no, corta el que empezó más tarde.
+- Pulsaciones repetidas en menos de 3 segundos se ignoran (`hotkey_debounce_seconds`).
+
+En el YAML:
+
+```yaml
+hotkey: "ctrl+alt+c"
+hotkey_seconds: 45
+hotkey_debounce_seconds: 3
+active_channel: alofoke
+```
+
+`hotkey_seconds` son los segundos del corte (por defecto 45). El atajo se escucha con [pynput](https://pypi.org/project/pynput/), en un hilo, y el evento entra al bucle de asyncio con `call_soon_threadsafe`. No hace falta ejecutar la terminal como administrador (a diferencia de la librería `keyboard`).
+
+Si pynput no está o no puede enganchar el teclado (pasa en la CI de Linux, sin sesión gráfica), `run` sigue y deja un aviso. Para apagar el atajo a propósito:
+
+```powershell
+python -m cliphunter run --config config.yaml --no-hotkey
+```
+
+Al cortar verás una línea `[cliphunter]` en la consola. En Windows, si instalas `plyer` o `win11toast`, también sale un aviso del sistema. Si no están, no pasa nada: el clip se guarda igual.
+
+```powershell
+pip install plyer
+```
+
 Nada se graba de un canal con `authorized: false`.
 
 Como mucho hay 2 ingestas a la vez (`max_concurrent_streams`, entre 1 y 2). Un tercero en directo espera hueco. Si una ingesta falla, reintenta con espera exponencial (1 s, 2 s, 4 s… hasta 60 s, con un poco de jitter) y **no** tumba al otro directo. Tras unos 30 s sanos, la espera vuelve a empezar en 1 s. streamlink solo reintenta un par de veces (`--retry-max 2`); la espera larga la lleva ClipHunter, para que un directo caído no deje el proceso colgado.
@@ -245,7 +276,7 @@ Eventos ya publicados: `stream.start`, `stream.end`, `segment.ready`, `clip.crea
 
 | Pieza | Estado en la fase 1 |
 | --- | --- |
-| `config`, `bus`, `storage`, `watcher`, `ingest`, `clip`, `observability` | Implementado |
+| `config`, `bus`, `storage`, `watcher`, `ingest`, `clip`, `hotkey`, `observability` | Implementado |
 | YouTube y Twitch (`platforms/`) | Implementado |
 | Kick (`platforms/kick.py`) | Stub, misma interfaz |
 | `signals/` | Interfaz `SignalDetector`. Nadie la llama todavía |
@@ -254,11 +285,11 @@ Eventos ya publicados: `stream.start`, `stream.end`, `segment.ready`, `clip.crea
 | `processing/` | Interfaz `reframe_vertical` (9:16) |
 | `replay`, `calibrate` | Comandos que explican que llegan después |
 
-Las tablas `clips` (`kind` manual\|auto, `signal_score`, `breakdown_json`, `title`, `hook`, `hashtags`) y `decisions` ya existen para no migrar el esquema el día que entren el scorer y Telegram.
+Las tablas `clips` (`kind` manual\|auto, `signal_score`, `weight`, `breakdown_json`, `title`, `hook`, `hashtags`) y `decisions` (`weight`) guardan el corte del atajo como muestra de calibración. El scorer y Telegram las reutilizarán.
 
 ## Hoja de ruta
 
-1. **Atajo global Ctrl+Alt+C** para lanzar el mismo corte que `clip` sin volver a la terminal.
+1. **Atajo global Ctrl+Alt+C**: ya está en `run` (esta fase). Se puede cambiar el combo y los segundos en el YAML.
 2. **Señales en tiempo real** (audio, chat, picos) sobre `segment.ready`.
 3. **Scorer con Claude**, usando `context`, `weights` y `thresholds` del canal. El título, el hook y los hashtags del clip salen de ahí.
 4. **Revisión por Telegram**: botones Approve, Reject y Adjust ±5 s. Eso escribe en `decisions`.
@@ -277,4 +308,5 @@ Las tablas `clips` (`kind` manual\|auto, `signal_score`, `breakdown_json`, `titl
 - Si la única calidad disponible es muy alta y tampoco existe `worst`, streamlink no abre el directo. No subimos a 1080p a propósito.
 - Un `kill -9` / cierre brusco puede dejar streamlink o ffmpeg vivos. Para el programa con Ctrl+C.
 - La confirmación es por ejecución, no un registro legal más allá de `confirmed_authorized_at`.
+- El atajo global depende de pynput y de una sesión de escritorio. Sin eso, `run` arranca igual y lo dice en el log. El aviso visual del sistema solo aparece si está `plyer` o `win11toast`.
 - `replay` y `calibrate` todavía no hacen nada.

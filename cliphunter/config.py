@@ -211,6 +211,10 @@ class AppConfig(BaseModel):
     skip_authorization_prompt: bool = False
     metrics_interval_seconds: int = Field(default=15, ge=5, le=300)
     log_level: str = "INFO"
+    hotkey: str = "ctrl+alt+c"
+    hotkey_seconds: float = Field(default=45, gt=0, le=600)
+    hotkey_debounce_seconds: float = Field(default=3, ge=0, le=60)
+    active_channel: str | None = None
     database_path: Path | None = None
     clips_dir: Path | None = None
     channels: list[ChannelConfig] = Field(default_factory=list)
@@ -242,6 +246,30 @@ class AppConfig(BaseModel):
         if level not in {"DEBUG", "INFO", "WARNING", "ERROR"}:
             raise ValueError("log_level must be DEBUG, INFO, WARNING or ERROR")
         return level
+
+    @field_validator("hotkey")
+    @classmethod
+    def _hotkey(cls, value: str) -> str:
+        text = value.strip().lower().replace("-", "+")
+        parts = [part for part in text.split("+") if part]
+        if not parts:
+            raise ValueError("hotkey must not be empty")
+        modifiers = {"ctrl", "control", "alt", "shift", "cmd", "win", "super"}
+        if any(part in modifiers for part in parts) and parts[-1] in modifiers:
+            raise ValueError("hotkey needs a non-modifier key")
+        if parts[-1] in modifiers or any(part not in modifiers and part != parts[-1] for part in parts):
+            raise ValueError("modifiers must come before the key, for example ctrl+alt+c")
+        normalized = ["ctrl" if part == "control" else part for part in parts]
+        return "+".join(normalized)
+
+    @field_validator("active_channel", mode="before")
+    @classmethod
+    def _active_channel(cls, value: object) -> object:
+        if value is None:
+            return None
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @model_validator(mode="after")
     def _unique_channels(self) -> AppConfig:

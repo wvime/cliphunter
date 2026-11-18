@@ -14,6 +14,18 @@ from cliphunter.timeutil import utc_iso
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 
+async def _ensure_column(db: aiosqlite.Connection, table: str, column: str, ddl: str) -> None:
+    """Add a column when an older database file is opened again."""
+
+    if table not in {"clips", "decisions"} or column != "weight" or ddl != "REAL":
+        raise ValueError(f"unsupported schema patch {table}.{column}")
+    cursor = await db.execute(f"PRAGMA table_info({table})")
+    rows = await cursor.fetchall()
+    names = {row["name"] for row in rows}
+    if column not in names:
+        await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+
 class Repo(Protocol):
     async def init(self) -> None: ...
 
@@ -69,6 +81,7 @@ class Repo(Protocol):
         hook: str | None = None,
         hashtags: list[str] | None = None,
         duration_seconds: float | None = None,
+        weight: float | None = None,
     ) -> int: ...
 
     async def insert_decision(
@@ -78,7 +91,10 @@ class Repo(Protocol):
         action: str,
         adjust_seconds: float | None = None,
         note: str | None = None,
+        weight: float | None = None,
     ) -> int: ...
+
+    async def list_decisions(self, clip_id: int | None = None) -> list[dict[str, Any]]: ...
 
     async def insert_metric(
         self,
@@ -118,6 +134,8 @@ class SqliteRepo:
         async with self._lock:
             db = await self._connect()
             await db.executescript(schema)
+            await _ensure_column(db, "clips", "weight", "REAL")
+            await _ensure_column(db, "decisions", "weight", "REAL")
             await db.execute("PRAGMA journal_mode=WAL")
             await db.execute("PRAGMA foreign_keys=ON")
             await db.execute("PRAGMA busy_timeout=5000")
@@ -291,6 +309,7 @@ class SqliteRepo:
         hook: str | None = None,
         hashtags: list[str] | None = None,
         duration_seconds: float | None = None,
+        weight: float | None = None,
     ) -> int:
         async with self._lock:
             db = await self._connect()
@@ -299,8 +318,8 @@ class SqliteRepo:
                 INSERT INTO clips (
                     session_id, channel_id, kind, status, signal_score,
                     breakdown_json, title, hook, hashtags, attribution_json,
-                    file_path, duration_seconds, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    file_path, duration_seconds, weight, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session_id,
@@ -315,6 +334,7 @@ class SqliteRepo:
                     _dumps(attribution),
                     file_path,
                     duration_seconds,
+                    weight,
                     utc_iso(),
                 ),
             )
@@ -330,15 +350,16 @@ class SqliteRepo:
         action: str,
         adjust_seconds: float | None = None,
         note: str | None = None,
+        weight: float | None = None,
     ) -> int:
         async with self._lock:
             db = await self._connect()
             cursor = await db.execute(
                 """
-                INSERT INTO decisions (clip_id, action, adjust_seconds, note, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO decisions (clip_id, action, adjust_seconds, note, weight, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (clip_id, action, adjust_seconds, note, utc_iso()),
+                (clip_id, action, adjust_seconds, note, weight, utc_iso()),
             )
             await db.commit()
             if cursor.lastrowid is None:
@@ -395,6 +416,19 @@ class SqliteRepo:
                 cursor = await db.execute(
                     "SELECT * FROM metrics WHERE session_id = ? ORDER BY id",
                     (session_id,),
+                )
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    async def list_decisions(self, clip_id: int | None = None) -> list[dict[str, Any]]:
+        async with self._lock:
+            db = await self._connect()
+            if clip_id is None:
+                cursor = await db.execute("SELECT * FROM decisions ORDER BY id")
+            else:
+                cursor = await db.execute(
+                    "SELECT * FROM decisions WHERE clip_id = ? ORDER BY id",
+                    (clip_id,),
                 )
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]

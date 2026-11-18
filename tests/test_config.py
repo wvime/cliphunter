@@ -39,6 +39,10 @@ channels:
     assert config.poll_interval_seconds == 45
     names = [channel.display_name for channel in config.authorized_channels()]
     assert names == ["Si"]
+    assert config.hotkey == "ctrl+alt+c"
+    assert config.hotkey_seconds == 45
+    assert config.hotkey_debounce_seconds == 3
+    assert config.active_channel is None
 
 
 def test_quality_comma_string_and_minimal_yaml(tmp_path: Path):

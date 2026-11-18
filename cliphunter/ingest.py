@@ -149,6 +149,8 @@ class IngestSession:
         self.reconnect = reconnect
         self.input_format = input_format
         self.session_id = int(session_meta["session_id"]) if session_meta.get("session_id") else 0
+        self.started_at = 0.0
+        self.config_id: str | None = None
         self.current_pids: list[int] = []
         self._stop = asyncio.Event()
         self._proc_lock = asyncio.Lock()

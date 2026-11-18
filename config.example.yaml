@@ -18,6 +18,11 @@ quality:
   - 720p
 # Recomendado: entre 30 y 60 segundos.
 poll_interval_seconds: 45
+# Atajo global mientras `run` está en marcha. Corta hotkey_seconds del canal activo.
+hotkey: "ctrl+alt+c"
+hotkey_seconds: 45
+hotkey_debounce_seconds: 3
+# active_channel: TuCanal
 skip_authorization_prompt: false
 metrics_interval_seconds: 15
 log_level: INFO

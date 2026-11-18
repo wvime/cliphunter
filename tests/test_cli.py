@@ -21,7 +21,9 @@ def test_help_documents_run_and_clip(capsys):
     with pytest.raises(SystemExit) as run_help:
         main(["run", "--help"])
     assert run_help.value.code == 0
-    assert "--yes" in capsys.readouterr().out
+    run_text = capsys.readouterr().out
+    assert "--yes" in run_text
+    assert "--no-hotkey" in run_text
 
 
 def test_version_doctor_and_future_commands(capsys):

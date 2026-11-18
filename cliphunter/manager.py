@@ -7,6 +7,7 @@ and take a free slot when one ends. One stream's crash does not cancel the other
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -50,6 +51,26 @@ class IngestManager:
         self.tasks: dict[str, asyncio.Task[None]] = {}
         self.pending: list[dict] = []
         self._closing = False
+
+    def live_streams(self) -> list[ActiveStream]:
+        from cliphunter.hotkey import ActiveStream
+
+        streams: list[ActiveStream] = []
+        for key, session in self.active.items():
+            display = str(session.session_meta.get("streamer") or key)
+            streams.append(
+                ActiveStream(
+                    channel_key=key,
+                    config_id=session.config_id,
+                    display_name=display,
+                    started_at=session.started_at,
+                    index_path=session.directory / "index.json",
+                    session_id=session.session_id,
+                    channel_db_id=int(session.session_meta.get("channel_id") or 0),
+                    authorization=session.session_meta.get("authorization"),
+                )
+            )
+        return streams
 
     def list_streams(self) -> list[dict]:
         return [
@@ -221,6 +242,9 @@ class IngestManager:
             platform=str(payload.get("platform") or ""),
             on_segment=on_segment,
         )
+        session.started_at = time.monotonic()
+        raw_id = payload.get("channel_id")
+        session.config_id = str(raw_id) if raw_id else None
         self.active[key] = session
         self.tasks[key] = asyncio.create_task(self._guard(key, session), name=f"ingest-{key}")
         log_event("INFO", "ingest.started", channel=key, session_id=session_id, url=stream_url)
