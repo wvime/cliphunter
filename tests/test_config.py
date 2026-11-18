@@ -119,6 +119,135 @@ def test_channel_key_is_filesystem_safe():
     assert channel.display_name == "Ibai Llanos"
 
 
+def test_alofoke_example_authorization_reaches_clip_attribution(tmp_path: Path):
+    from cliphunter.clip import find_channel, plan_clip
+    from cliphunter.index import Segment, SegmentIndex
+    from cliphunter.timeutil import utc_iso, utc_now
+
+    config = load_config(Path("config.alofoke.example.yaml"))
+    assert config.max_concurrent_streams == 2
+    assert config.buffer_minutes == 10
+    assert config.segment_seconds == 4
+    assert config.quality == ["480p", "720p"]
+    assert config.poll_interval_seconds == 45
+    assert len(config.channels) == 1
+    channel = find_channel(config, "alofoke")
+    assert channel.authorized is True
+    assert channel.platform == "youtube"
+    assert channel.url == "https://www.youtube.com/@Alofokeradioshow"
+    assert channel_key(channel) == "youtube_alofoke"
+    assert channel.display_name == "alofoke"
+    assert channel.authorization_payload() == {
+        "tipo": "permiso público del creador",
+        "fuente": "https://www.instagram.com/p/DekQ6nYKdhy/",
+        "fecha": "2026-11-17",
+    }
+    assert channel.context_fields["idioma"] == "es"
+    assert channel.context_fields["nicho"] == "radio show / entretenimiento, reality TV"
+    assert "momentos virales" in channel.context_fields["buen_clip"]
+    assert "violencia grave" in channel.context_fields["evitar"]
+    assert "idioma: es" in channel.context
+    assert channel.weights == {
+        "chat": 0.35,
+        "emotes": 0.25,
+        "audio": 0.30,
+        "scene": 0.05,
+        "viewers": 0.05,
+    }
+    assert channel.thresholds["signal_score"] == 2.5
+    assert channel.thresholds["cooldown_s"] == 45
+    assert channel.emotes_hype == ["😂", "🤣", "💀", "🔥", "JAJAJA", "jajaja"]
+
+    directory = tmp_path / "buffer"
+    directory.mkdir()
+    (directory / "a.ts").write_bytes(b"segment")
+    now = utc_now()
+    index = SegmentIndex(
+        channel_key=channel_key(channel),
+        platform="youtube",
+        directory=directory,
+        session={
+            "streamer": channel.display_name,
+            "context": channel.context,
+            "authorization": channel.authorization_payload(),
+        },
+    )
+    index.add(
+        Segment(
+            file="a.ts",
+            duration=4,
+            wall_start=utc_iso(now),
+            wall_end=utc_iso(now),
+            streamer="alofoke",
+            platform="youtube",
+            stream_url=channel.url,
+            stream_title="Show",
+        )
+    )
+    plan = plan_clip(index, 4)
+    assert plan.attribution["authorization"] == channel.authorization_payload()
+    assert plan.attribution["streamer"] == "alofoke"
+    assert "buen_clip:" in plan.attribution["channel_context"]
+
+
+def test_authorization_fields_are_optional(tmp_path: Path):
+    config = load_config(
+        _write(
+            tmp_path,
+            """
+channels:
+  - platform: youtube
+    handle: "@SoloTipo"
+    authorization:
+      tipo: "nota interna"
+""",
+        )
+    )
+    assert config.channels[0].authorization_payload() == {"tipo": "nota interna"}
+    bare = load_config(
+        _write(
+            tmp_path,
+            """
+channels:
+  - platform: youtube
+    handle: "@SinPermiso"
+""",
+        )
+    )
+    assert bare.channels[0].authorization is None
+    assert bare.channels[0].authorization_payload() is None
+
+
+def test_authorization_fecha_and_context_are_validated(tmp_path: Path):
+    with pytest.raises(ConfigError, match="fecha"):
+        load_config(
+            _write(
+                tmp_path,
+                """
+channels:
+  - platform: youtube
+    handle: "@Fecha"
+    authorization:
+      fecha: ayer
+""",
+            )
+        )
+    with pytest.raises(ConfigError, match="context keys"):
+        load_config(
+            _write(
+                tmp_path,
+                """
+channels:
+  - platform: youtube
+    handle: "@Ctx"
+    context:
+      idioma: es
+      desconocido: no
+""",
+            )
+        )
+
+
 def test_example_config_loads():
     config = load_config(Path("config.example.yaml"))
     assert config.max_concurrent_streams == 2

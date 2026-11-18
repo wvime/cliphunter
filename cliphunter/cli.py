@@ -126,6 +126,7 @@ async def _cmd_clip(args: argparse.Namespace) -> int:
             output=output,
             repo=repo,
             channel_id=channel_id,
+            authorization=channel.authorization_payload(),
         )
     finally:
         await repo.close()

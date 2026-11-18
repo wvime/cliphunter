@@ -54,7 +54,8 @@ def find_channel(config: AppConfig, canal: str) -> ChannelConfig:
         key = channel_key(channel).lower()
         handle = (channel.handle or "").lstrip("@").lower()
         display = channel.display_name.lower()
-        if needle in {key, handle, display}:
+        ident = (channel.id or "").lower()
+        if needle in {key, handle, display, ident}:
             exact.append(channel)
         elif needle in key or (handle and needle in handle):
             partial.append(channel)
@@ -117,6 +118,9 @@ def plan_clip(index: SegmentIndex, seconds: float) -> ClipPlan:
         "source_segments": [segment.file for segment in selected],
         "created_at": utc_iso(),
     }
+    authorization = index.session.get("authorization")
+    if authorization:
+        attribution["authorization"] = authorization
     lines: list[str] = []
     for segment in selected:
         path = (index.directory / segment.file).resolve()
@@ -214,6 +218,7 @@ async def create_clip(
     output: Path,
     repo: Repo | None = None,
     channel_id: int | None = None,
+    authorization: dict | None = None,
 ) -> ClipResult:
     if not index_path.exists():
         raise ClipError(
@@ -221,6 +226,8 @@ async def create_clip(
         )
     index = SegmentIndex.load(index_path)
     plan = plan_clip(index, seconds)
+    if authorization:
+        plan.attribution["authorization"] = authorization
     duration = await mux_plan(plan, output)
     plan.attribution["file_path"] = str(output.resolve())
     sidecar = output.with_suffix(".json")

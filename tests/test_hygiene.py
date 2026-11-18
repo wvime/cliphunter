@@ -19,7 +19,13 @@ def test_env_example_has_empty_secrets_and_gitignore_covers_env():
     assert ".env" in ignored
     assert "config.yaml" in ignored
     example = Path(".env.example").read_text(encoding="utf-8")
-    for name in ("YOUTUBE_API_KEY", "TWITCH_CLIENT_ID", "TWITCH_CLIENT_SECRET", "ANTHROPIC_API_KEY"):
+    for name in (
+        "YOUTUBE_API_KEY",
+        "TWITCH_CLIENT_ID",
+        "TWITCH_CLIENT_SECRET",
+        "ANTHROPIC_API_KEY",
+        "TELEGRAM_BOT_TOKEN",
+    ):
         assert name in example
     for line in example.splitlines():
         stripped = line.strip()

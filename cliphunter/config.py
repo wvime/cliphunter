@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import date, datetime
 from pathlib import Path
 from typing import Literal
 
@@ -41,20 +42,84 @@ def default_buffer_dir() -> Path:
     return Path.home() / "cliphunter" / "buffer"
 
 
+_CONTEXT_KEYS = ("idioma", "nicho", "buen_clip", "evitar")
+
+
+class AuthorizationRecord(BaseModel):
+    """Optional note of why this channel may be recorded. All fields are optional."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    tipo: str | None = None
+    fuente: str | None = None
+    fecha: str | None = None
+
+    @field_validator("tipo", "fuente", mode="before")
+    @classmethod
+    def _blank(cls, value: object) -> object:
+        if value is None:
+            return None
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("fecha", mode="before")
+    @classmethod
+    def _fecha(cls, value: object) -> str | None:
+        if value is None or value == "":
+            return None
+        if isinstance(value, datetime):
+            return value.date().isoformat()
+        if isinstance(value, date):
+            return value.isoformat()
+        if isinstance(value, str):
+            text = value.strip()
+            try:
+                date.fromisoformat(text)
+            except ValueError as exc:
+                raise ValueError("fecha must be YYYY-MM-DD") from exc
+            return text
+        raise ValueError("fecha must be YYYY-MM-DD")
+
+    @model_validator(mode="after")
+    def _fuente_url(self) -> AuthorizationRecord:
+        if self.fuente and not re.match(r"^https?://", self.fuente):
+            raise ValueError("authorization.fuente must start with http:// or https://")
+        return self
+
+    def payload(self) -> dict[str, str]:
+        data: dict[str, str] = {}
+        if self.tipo:
+            data["tipo"] = self.tipo
+        if self.fuente:
+            data["fuente"] = self.fuente
+        if self.fecha:
+            data["fecha"] = self.fecha
+        return data
+
+
+def render_context(fields: dict[str, str]) -> str:
+    return "\n".join(f"{key}: {fields[key]}" for key in _CONTEXT_KEYS if fields.get(key))
+
+
 class ChannelConfig(BaseModel):
     """One channel the operator might authorize ClipHunter to record."""
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
+    id: str | None = None
     platform: Literal["youtube", "twitch", "kick"]
     handle: str | None = None
     url: str | None = None
     authorized: bool = False
+    authorization: AuthorizationRecord | None = None
     context: str = ""
+    context_fields: dict[str, str] = Field(default_factory=dict)
     weights: dict[str, float] = Field(default_factory=dict)
     thresholds: dict[str, float] = Field(default_factory=dict)
+    emotes_hype: list[str] = Field(default_factory=list)
 
-    @field_validator("handle", "url", mode="before")
+    @field_validator("id", "handle", "url", mode="before")
     @classmethod
     def _blank_to_none(cls, value: object) -> object:
         if value is None:
@@ -62,6 +127,36 @@ class ChannelConfig(BaseModel):
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+    @field_validator("emotes_hype", mode="before")
+    @classmethod
+    def _emotes(cls, value: object) -> object:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [part.strip() for part in value.split(",") if part.strip()]
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        raise ValueError("emotes_hype must be a list")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _expand_context(cls, value: object) -> object:
+        if not isinstance(value, dict) or not isinstance(value.get("context"), dict):
+            return value
+        raw = value["context"]
+        unknown = sorted(set(raw) - set(_CONTEXT_KEYS))
+        if unknown:
+            raise ValueError("context keys not allowed: " + ", ".join(unknown))
+        fields = {
+            key: str(raw[key]).strip()
+            for key in _CONTEXT_KEYS
+            if raw.get(key) not in (None, "")
+        }
+        data = dict(value)
+        data["context_fields"] = fields
+        data["context"] = render_context(fields)
+        return data
 
     @model_validator(mode="after")
     def _identity(self) -> ChannelConfig:
@@ -75,16 +170,31 @@ class ChannelConfig(BaseModel):
     def display_name(self) -> str:
         if self.handle:
             return self.handle.lstrip("@")
+        if self.id:
+            return self.id
         if self.url:
-            return self.url.rstrip("/").rsplit("/", 1)[-1]
+            return self.url.rstrip("/").rsplit("/", 1)[-1].lstrip("@")
         return self.platform
+
+    def authorization_payload(self) -> dict[str, str] | None:
+        if self.authorization is None:
+            return None
+        payload = self.authorization.payload()
+        return payload or None
 
 
 def channel_key(channel: ChannelConfig) -> str:
-    """Stable directory name, safe on Windows."""
+    """Stable directory name, safe on Windows.
 
-    raw = (channel.handle or channel.url or channel.platform).strip().lstrip("@")
-    raw = re.sub(r"^https?://", "", raw)
+    An explicit ``id`` wins over the handle or URL, so ``--canal alofoke``
+    matches the directory ``youtube_alofoke``.
+    """
+
+    if channel.id:
+        raw = channel.id.strip()
+    else:
+        raw = (channel.handle or channel.url or channel.platform).strip().lstrip("@")
+        raw = re.sub(r"^https?://", "", raw)
     slug = _UNSAFE.sub("_", raw).strip("._-") or "channel"
     return f"{channel.platform}_{slug[:60]}"
 

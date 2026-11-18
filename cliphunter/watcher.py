@@ -121,8 +121,11 @@ class Watcher:
             "title": status.title,
             "video_id": status.video_id or video,
             "context": channel.context,
+            "context_fields": dict(channel.context_fields),
             "weights": channel.weights,
             "thresholds": channel.thresholds,
+            "authorization": channel.authorization_payload(),
+            "emotes_hype": list(channel.emotes_hype),
         }
 
     def _end_payload(self, channel: ChannelConfig, video: str) -> dict:

@@ -55,14 +55,25 @@ python -m cliphunter doctor
 
 Tiene que encontrar `ffmpeg` y `streamlink`. `ffprobe` suele venir con ffmpeg.
 
-4. Copia la configuración de ejemplo. `config.yaml` y `.env` están en `.gitignore`: no se suben al repo.
+4. Copia la configuración de ejemplo. `config.yaml` y `.env` están en `.gitignore`: no se suben al repo. Hay dos ejemplos:
+
+- `config.example.yaml`: tres canales de plantilla, todos con `authorized: false`.
+- `config.alofoke.example.yaml`: el canal de Alofoke Radio Show (`https://www.youtube.com/@Alofokeradioshow`), ya marcado como autorizado, con el permiso público y los pesos del scorer.
 
 ```powershell
 copy config.example.yaml config.yaml
 copy .env.example .env
 ```
 
-5. Edita `config.yaml`. Pon `authorized: true` **solo** en canales que puedas grabar. El ejemplo trae los tres en `false` a propósito.
+Para usar el canal de Alofoke en lugar de la plantilla:
+
+```powershell
+copy config.alofoke.example.yaml config.yaml
+```
+
+El corte de ese canal es `python -m cliphunter clip --canal alofoke --ultimos 45`. La carpeta del buffer es `youtube_alofoke`.
+
+5. Edita `config.yaml`. Pon `authorized: true` **solo** en canales que puedas grabar. `config.example.yaml` trae los tres en `false` a propósito. El de Alofoke ya viene en `true` porque el permiso está documentado en el propio archivo.
 
 ```yaml
 max_concurrent_streams: 2
@@ -78,9 +89,15 @@ channels:
     handle: "@TuCanal"
     authorized: true
     context: "Variedades en español. Humor y reacciones."
+    authorization:
+      tipo: "permiso del creador"
+      fuente: "https://ejemplo.invalid/permiso"
+      fecha: "2026-11-17"
 ```
 
-`poll_interval_seconds` recomendado: entre 30 y 60. `quality` es una preferencia: se prueba 480p, luego 720p y, si ninguna existe, la calidad más baja (`worst`), para no saltar a 1080p.
+`context` puede ser un texto o un mapa con `idioma`, `nicho`, `buen_clip` y `evitar` (así está en el ejemplo de Alofoke). `authorization` es opcional: `tipo`, `fuente` y `fecha` (`AAAA-MM-DD`). Si rellenas alguno, el clip lo guarda en el JSON de atribución y en `attribution_json`.
+
+`poll_interval_seconds` recomendado: entre 30 y 60 (en el borrador del ejemplo de Alofoke se llamaba `poll_interval_s`). `quality` es una preferencia: se prueba 480p, luego 720p y, si ninguna existe, la calidad más baja (`worst`), para no saltar a 1080p. También acepta la forma `"480p,720p"`.
 
 La base queda al lado del buffer: `C:\cliphunter\cliphunter.sqlite`. Los clips, en `C:\cliphunter\clips\`.
 
@@ -126,7 +143,7 @@ La app pide sola el token de cliente. Sin esas variables, el canal de Twitch no 
 
 Kick implementa la misma interfaz `Platform`, pero `check_live` responde `kick_not_implemented`. No graba, aunque pongas `authorized: true`. La API pública de Kick no es estable y queda para otra fase.
 
-`ANTHROPIC_API_KEY` se lee para las fases siguientes y **no se usa** en la fase 1. El scorer de Claude está en `cliphunter/scoring.py` y lanza `NotImplementedError`.
+`ANTHROPIC_API_KEY` y `TELEGRAM_BOT_TOKEN` se leen para las fases siguientes y **no se usan** en la fase 1. El scorer de Claude está en `cliphunter/scoring.py` y lanza `NotImplementedError`. El token de Telegram será el bot de Approve / Reject / Adjust.
 
 ## Grabar
 
@@ -168,7 +185,7 @@ python -m cliphunter clip --config config.yaml --canal TuCanal --ultimos 45
 
 `--canal` acepta el handle (`TuCanal` o `@TuCanal`) o la clave (`youtube_TuCanal`). `--ultimos` son segundos.
 
-El mp4 y un JSON con la atribución quedan en `C:\cliphunter\clips\`. El JSON y la fila de SQLite incluyen streamer, plataforma, URL, título del directo, contexto del canal y las marcas de tiempo. `kind` queda en `manual` y `status` en `ready`.
+El mp4 y un JSON con la atribución quedan en `C:\cliphunter\clips\`. El JSON y la fila de SQLite incluyen streamer, plataforma, URL, título del directo, contexto del canal, las marcas de tiempo y, si el canal lo trae, el bloque `authorization` (`tipo`, `fuente`, `fecha`). `kind` queda en `manual` y `status` en `ready`.
 
 `run` escribe `C:\cliphunter\buffer\<canal>\index.json` con reemplazo atómico (`os.replace`). `clip` lee ese fichero; no hace falta un puerto de control. El segmento que ffmpeg todavía está escribiendo (unos 4 s en el borde del directo) no entra en el corte.
 
