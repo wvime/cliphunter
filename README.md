@@ -218,7 +218,7 @@ Eso guarda el chat id en `telegram_chat.json`, al lado de la base. Solo se acept
 
 3. Un ajuste vuelve a cortar el buffer **sin re-encode** (segmentos enteros, así que puede pasarse de 5 s) y reenvía la vista previa. Cada decisión queda en `decisions` con los segundos del ajuste y el breakdown de la señal, si lo hay.
 
-4. **Aprobar** copia el mp4 a `listos_para_subir` (junto al buffer, por ejemplo `C:\cliphunter\listos_para_subir`) y escribe un `.txt` con `title`, `hook` y `hashtags` vacíos por ahora, más la línea de crédito del canal. En Alofoke es `🎙️ @Alofokeradioshow`. Los subtítulos, el 9:16 y Claude llegan después.
+4. **Aprobar** copia el mp4 a `listos_para_subir` (junto al buffer, por ejemplo `C:\cliphunter\listos_para_subir`) y escribe un `.txt` solo con `title`, `hook` y `hashtags` (vacíos por ahora). Ese texto es el que se publicaría: no lleva crédito, ni `@del canal`, ni la línea de atribución. El canal, la URL, el permiso y el crédito se quedan en el JSON del clip y en `attribution_json`. Los subtítulos, el 9:16 y Claude llegan después.
 
 Si el mp4 pesa más de 50 MB, solo la copia que se manda a Telegram se baja a 480p con un ffmpeg de un hilo. El archivo que apruebas sigue siendo el original.
 

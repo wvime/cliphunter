@@ -67,13 +67,15 @@ def build_caption(item: dict[str, Any]) -> str:
 
 
 def ready_sidecar_text(attribution: dict[str, Any]) -> str:
+    """Text that can be pasted into a post. Attribution stays out of this file.
+
+    ``credit`` and other record-keeping fields live only in the JSON sidecar
+    and in ``attribution_json``.
+    """
+
     title = attribution.get("title") or ""
     hook = attribution.get("hook") or ""
     tags = attribution.get("hashtags") or ""
     if isinstance(tags, list):
         tags = " ".join(str(tag) for tag in tags)
-    credit = str(attribution.get("credit") or "").strip()
-    lines = [f"title: {title}", f"hook: {hook}", f"hashtags: {tags}", ""]
-    if credit:
-        lines.append(credit)
-    return "\n".join(lines).rstrip() + "\n"
+    return f"title: {title}\nhook: {hook}\nhashtags: {tags}\n"

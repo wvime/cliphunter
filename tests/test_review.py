@@ -112,11 +112,17 @@ def test_caption_keyboard_and_sidecar():
         "Ajustar +5s fin",
     ]
     assert parse_callback("is:4") == ("is", 4)
-    text = ready_sidecar_text({"title": "", "hook": "", "hashtags": "", "credit": "🎙️ @Alofokeradioshow"})
-    assert "title:" in text
-    assert "hook:" in text
-    assert "hashtags:" in text
-    assert text.strip().endswith("🎙️ @Alofokeradioshow")
+    text = ready_sidecar_text(
+        {
+            "title": "se cayó el micrófono",
+            "hook": "nadie lo vio venir",
+            "hashtags": ["#radio"],
+            "credit": "🎙️ @Alofokeradioshow",
+        }
+    )
+    assert text == "title: se cayó el micrófono\nhook: nadie lo vio venir\nhashtags: #radio\n"
+    assert "@Alofokeradioshow" not in text
+    assert "🎙️" not in text
 
 
 def test_compress_only_above_telegram_limit(tmp_path: Path):
@@ -189,7 +195,7 @@ async def test_send_preview_and_ignore_other_chats(tmp_path: Path):
         assert clip_id == 1
 
 
-async def test_approve_copies_ready_folder_with_credit(tmp_path: Path):
+async def test_approve_keeps_credit_out_of_the_publishable_text(tmp_path: Path):
     config = _config(tmp_path)
     async with SqliteRepo(config.resolved_database_path()) as repo:
         channel_id = await _channel(repo)
@@ -198,11 +204,13 @@ async def test_approve_copies_ready_folder_with_credit(tmp_path: Path):
         dest = await runtime.approve(clip_id)
         assert dest.exists()
         sidecar = dest.with_suffix(".txt").read_text(encoding="utf-8")
-        assert sidecar.strip().endswith("🎙️ @Alofokeradioshow")
-        assert "title:" in sidecar
+        assert sidecar == "title: \nhook: \nhashtags: \n"
+        assert "@Alofokeradioshow" not in sidecar
         row = await repo.get_clip(clip_id)
         assert row is not None
         assert row["status"] == "approved"
+        stored = json.loads(row["attribution_json"])
+        assert stored["credit"] == "🎙️ @Alofokeradioshow"
         decisions = await repo.list_decisions(clip_id)
         assert decisions[0]["action"] == "approve"
         assert json.loads(decisions[0]["breakdown_json"]) == {"audio": 0.3}

@@ -26,6 +26,7 @@ channels:
     platform: youtube
     url: "https://www.youtube.com/@Alofokeradioshow"
     authorized: true
+    # Solo registro interno (attribution_json). No se copia al .txt de publicación.
     credit: "🎙️ @Alofokeradioshow"
     authorization:
       tipo: "permiso público del creador"
