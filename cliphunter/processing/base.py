@@ -1,6 +1,7 @@
 """Heavy processing, only after a human approves a clip.
 
-Phase 1 does not reframe. ``reframe_vertical`` is the 9:16 step for later.
+Reframe to 9:16 and the burned title are not run yet. The title layout lives
+in ``title_overlay.TitleStyle`` and ``plan_title_spans``.
 """
 
 from __future__ import annotations

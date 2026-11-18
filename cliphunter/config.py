@@ -11,6 +11,8 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from cliphunter.processing.title_overlay import TitleStyle
+
 _WIN_DRIVE = re.compile(r"^[A-Za-z]:[\\/](.*)$")
 _UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
 
@@ -217,6 +219,7 @@ class AppConfig(BaseModel):
     hotkey_debounce_seconds: float = Field(default=3, ge=0, le=60)
     active_channel: str | None = None
     review_port: int = Field(default=8765, ge=1024, le=65535)
+    title_style: TitleStyle = Field(default_factory=TitleStyle)
     database_path: Path | None = None
     clips_dir: Path | None = None
     channels: list[ChannelConfig] = Field(default_factory=list)

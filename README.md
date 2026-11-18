@@ -304,7 +304,7 @@ Eventos ya publicados: `stream.start`, `stream.end`, `segment.ready`, `clip.crea
 | `signals/` | Interfaz `SignalDetector`. Nadie la llama todavía |
 | `scoring.py` (`ClaudeScorer`) | Interfaz. No hay llamadas a Anthropic |
 | `review/` | Telegram (@clipowii_bot) y página local en `127.0.0.1`. El 9:16 y Claude siguen después |
-| `processing/` | Interfaz `reframe_vertical` (9:16) |
+| `processing/` | El 9:16 no se renderiza. `title_style` ya describe la caja del título |
 | `replay`, `calibrate` | Comandos que explican que llegan después |
 
 Las tablas `clips` (`kind` manual\|auto, `signal_score`, `weight`, `breakdown_json`, `title`, `hook`, `hashtags`) y `decisions` (`weight`) guardan el corte del atajo como muestra de calibración. El scorer y Telegram las reutilizarán.
@@ -315,7 +315,7 @@ Las tablas `clips` (`kind` manual\|auto, `signal_score`, `weight`, `breakdown_js
 2. **Señales en tiempo real** (audio, chat, picos) sobre `segment.ready`.
 3. **Scorer con Claude**, usando `context`, `weights` y `thresholds` del canal. El título, el hook y los hashtags del clip salen de ahí.
 4. **Revisión por Telegram**: botones Approve, Reject y Adjust ±5 s. Eso escribe en `decisions`.
-5. **Procesado pesado solo al aprobar**: reencuadre 9:16 y el resto del acabado. La fase 1 no recodifica.
+5. **Procesado pesado solo al aprobar**: reencuadre 9:16, subtítulos y título quemado. El estilo ya está en `title_style` (caja blanca redondeada arriba, texto negro en negrita, nombre de `{sujeto}` en amarillo). `{sujeto}` lo devolverá Claude. Se pintará con un overlay ASS o con `drawtext`/`drawbox` de ffmpeg, solo CPU, sin tocar el atajo ni Telegram. Hoy no se dibuja.
 6. **`python -m cliphunter calibrate`**: ajustar umbrales con las decisiones ya guardadas.
 7. **`python -m cliphunter replay`**: volver a puntuar un buffer que ya está en disco.
 

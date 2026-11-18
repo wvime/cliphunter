@@ -27,6 +27,20 @@ skip_authorization_prompt: false
 metrics_interval_seconds: 15
 log_level: INFO
 
+# Aún no se dibuja. Al aprobar, una fase posterior quema este título
+# en el 9:16: caja blanca redondeada arriba, texto negro en negrita,
+# y el nombre de {sujeto} (lo devuelve Claude) resaltado en amarillo.
+title_style:
+  box_color: white
+  text_color: black
+  highlight_color: yellow
+  highlight_mode: background
+  font: Arial
+  position: top
+  corner_radius: 16
+  title_format: "*{sujeto}* {resto}"
+  renderer: ass
+
 channels:
   # Cambia authorized a true solo si puedes grabar este canal.
   - platform: youtube

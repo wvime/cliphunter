@@ -13,6 +13,7 @@ class ScoreResult(BaseModel):
     score: float
     breakdown: dict[str, float] = Field(default_factory=dict)
     title: str | None = None
+    sujeto: str | None = None
     hook: str | None = None
     hashtags: list[str] = Field(default_factory=list)
 

@@ -20,6 +20,15 @@ hotkey_seconds: 45
 hotkey_debounce_seconds: 3
 # Con dos directos, el atajo corta este. Si solo hay uno, da igual.
 active_channel: alofoke
+title_style:
+  box_color: white
+  text_color: black
+  highlight_color: yellow
+  highlight_mode: background
+  font: Arial
+  corner_radius: 16
+  title_format: "*{sujeto}*"
+  renderer: ass
 
 channels:
   - id: alofoke
