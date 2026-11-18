@@ -315,7 +315,7 @@ Las tablas `clips` (`kind` manual\|auto, `signal_score`, `weight`, `breakdown_js
 2. **Señales en tiempo real** (audio, chat, picos) sobre `segment.ready`.
 3. **Scorer con Claude**, usando `context`, `weights` y `thresholds` del canal. El título, el hook y los hashtags del clip salen de ahí.
 4. **Revisión por Telegram**: botones Approve, Reject y Adjust ±5 s. Eso escribe en `decisions`.
-5. **Procesado pesado solo al aprobar**: reencuadre 9:16, subtítulos y título quemado. El estilo ya está en `title_style` (caja blanca redondeada arriba, texto negro en negrita, nombre de `{sujeto}` en amarillo). `{sujeto}` lo devolverá Claude. Se pintará con un overlay ASS o con `drawtext`/`drawbox` de ffmpeg, solo CPU, sin tocar el atajo ni Telegram. Hoy no se dibuja.
+5. **Procesado pesado solo al aprobar**: reencuadre 9:16, subtítulos y título quemado. El estilo ya está en `title_style` (caja blanca redondeada arriba, texto negro en negrita, nombre de `{sujeto}` en amarillo). La fuente por defecto es **Montserrat Black** (licencia OFL), incluida en `assets/fonts/Montserrat-Black.ttf`. `font` y `font_file` se pueden cambiar; ffmpeg y ASS recibirán la ruta absoluta de ese `.ttf`, así que no hace falta instalar la fuente en Windows. `{sujeto}` lo devolverá Claude. Hoy no se dibuja, y no afecta al atajo ni a Telegram.
 6. **`python -m cliphunter calibrate`**: ajustar umbrales con las decisiones ya guardadas.
 7. **`python -m cliphunter replay`**: volver a puntuar un buffer que ya está en disco.
 

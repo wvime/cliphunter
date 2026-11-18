@@ -13,7 +13,8 @@ Planned renderer, CPU only, Windows-friendly:
   ``-vf ass=`` or the ``subtitles`` filter, ``-threads 1``.
 * ``drawtext``: fallback. ``drawbox`` for the white panel (square corners)
   plus two ``drawtext`` passes, the second only over the highlighted name.
-  Needs ``fontfile`` pointing at a ``.ttf`` such as Arial.
+  ``fontfile`` is the absolute path of the bundled Montserrat Black
+  ``.ttf`` (or whatever ``font_file`` points at).
 
 ``burn_title`` raises until that phase. Planning the spans is implemented
 now so the scorer and the renderer share one markup.
@@ -34,6 +35,51 @@ _NAMED_COLORS = {
 }
 _STAR = re.compile(r"\*([^*]+)\*")
 _SUBJECT = "{sujeto}"
+_BUNDLED_FONT = Path("assets") / "fonts" / "Montserrat-Black.ttf"
+
+
+def bundled_font_path() -> Path:
+    """Absolute path to the OFL Montserrat Black file shipped with the repo."""
+
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        candidate = parent / _BUNDLED_FONT
+        if candidate.is_file():
+            return candidate
+    return here.parents[2] / _BUNDLED_FONT
+
+
+def resolve_font_file(font_file: str | None) -> Path:
+    """Turn a config path into an absolute file path for ffmpeg and ASS.
+
+    Relative paths are tried from the repo root (next to ``assets/``) and
+    then from the current directory. ``as_posix()`` on the result is what
+    ffmpeg should receive, including on Windows.
+    """
+
+    if not font_file:
+        return bundled_font_path()
+    path = Path(font_file)
+    if path.is_absolute():
+        return path
+    root = _project_root()
+    if root is not None:
+        from_root = (root / path).resolve()
+        if from_root.is_file():
+            return from_root
+    from_cwd = (Path.cwd() / path).resolve()
+    if from_cwd.is_file():
+        return from_cwd
+    if root is not None:
+        return (root / path).resolve()
+    return from_cwd
+
+
+def _project_root() -> Path | None:
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "assets").is_dir():
+            return parent
+    return None
 
 
 class TitleSpan(BaseModel):
@@ -50,8 +96,8 @@ class TitleStyle(BaseModel):
     text_color: str = "#000000"
     highlight_color: str = "#FFD400"
     highlight_mode: Literal["background", "text"] = "background"
-    font: str = "Arial"
-    font_file: str | None = None
+    font: str = "Montserrat Black"
+    font_file: str | None = "assets/fonts/Montserrat-Black.ttf"
     position: Literal["top"] = "top"
     corner_radius: int = Field(default=16, ge=0, le=80)
     title_format: str = "*{sujeto}*"
@@ -80,6 +126,19 @@ class TitleStyle(BaseModel):
         if _SUBJECT not in value and not _STAR.search(value):
             raise ValueError("title_format must mark the subject with {sujeto} or *Nombre*")
         return value
+
+    def resolved_font_file(self) -> Path:
+        return resolve_font_file(self.font_file)
+
+    def ffmpeg_fontfile(self) -> str:
+        """Absolute font path with forward slashes, for ``drawtext=fontfile=``."""
+
+        return self.resolved_font_file().as_posix()
+
+    def ass_fonts_dir(self) -> str:
+        """Directory ffmpeg's ``fontsdir`` option should search for this face."""
+
+        return self.resolved_font_file().parent.as_posix()
 
 
 def plan_title_spans(template: str, sujeto: str | None = None) -> list[TitleSpan]:

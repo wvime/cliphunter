@@ -13,7 +13,16 @@ def test_title_style_defaults_and_example():
     assert bare.title_style.text_color == "#000000"
     assert bare.title_style.highlight_color == "#FFD400"
     assert bare.title_style.highlight_mode == "background"
-    assert bare.title_style.font == "Arial"
+    assert bare.title_style.font == "Montserrat Black"
+    assert bare.title_style.font_file == "assets/fonts/Montserrat-Black.ttf"
+    font_path = bare.title_style.resolved_font_file()
+    assert font_path.is_file()
+    assert font_path.is_absolute()
+    assert font_path.name == "Montserrat-Black.ttf"
+    assert font_path.read_bytes()[:4] == b"\x00\x01\x00\x00"
+    assert (font_path.parent / "OFL.txt").is_file()
+    assert bare.title_style.ffmpeg_fontfile() == font_path.as_posix()
+    assert bare.title_style.ass_fonts_dir() == font_path.parent.as_posix()
     assert bare.title_style.renderer == "ass"
     assert bare.title_style.title_format == "*{sujeto}*"
 
@@ -25,6 +34,8 @@ def test_title_style_defaults_and_example():
     alofoke = load_config(Path("config.alofoke.example.yaml"))
     assert alofoke.title_style.highlight_color == "#FFD400"
     assert alofoke.title_style.corner_radius == 16
+    assert alofoke.title_style.font == "Montserrat Black"
+    assert alofoke.title_style.resolved_font_file() == font_path
 
 
 def test_marked_subject_is_the_highlighted_span():

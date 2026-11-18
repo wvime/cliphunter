@@ -35,7 +35,8 @@ title_style:
   text_color: black
   highlight_color: yellow
   highlight_mode: background
-  font: Arial
+  font: "Montserrat Black"
+  font_file: assets/fonts/Montserrat-Black.ttf
   position: top
   corner_radius: 16
   title_format: "*{sujeto}* {resto}"
