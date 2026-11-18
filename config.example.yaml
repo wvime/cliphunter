@@ -1,0 +1,55 @@
+# ClipHunter — fase 1
+# Copia este archivo a config.yaml y edítalo.
+# Solo se vigilan los canales con authorized: true.
+# Al arrancar, el programa pregunta una vez por canal si está autorizado
+# antes de grabar. Para saltarte la pregunta: --yes, o pon
+# skip_authorization_prompt: true, o CLIPHUNTER_SKIP_AUTH_PROMPT=1.
+
+max_concurrent_streams: 2
+# En Windows se usa tal cual. En Linux/macOS una ruta con letra de unidad
+# se redirige a ~/cliphunter/<último directorio> para poder probar el ejemplo.
+buffer_dir: 'C:\cliphunter\buffer'
+buffer_minutes: 10
+segment_seconds: 4
+# Preferencia de menor a mayor. Si ninguna existe, se usa "worst"
+# (la calidad más baja) para no saltar a 1080p.
+quality:
+  - 480p
+  - 720p
+# Recomendado: entre 30 y 60 segundos.
+poll_interval_seconds: 45
+skip_authorization_prompt: false
+metrics_interval_seconds: 15
+log_level: INFO
+
+channels:
+  # Cambia authorized a true solo si puedes grabar este canal.
+  - platform: youtube
+    handle: "@TuCanal"
+    authorized: false
+    context: "Canal de variedades en español. Momentos de humor y reacciones."
+    weights:
+      humor: 1.0
+      reaccion: 0.8
+      hype: 0.5
+    thresholds:
+      clip_score: 0.7
+
+  - platform: twitch
+    handle: "tucanal"
+    authorized: false
+    context: "English-language FPS streamer. Clutch rounds and funny fails."
+    weights:
+      clutch: 1.0
+      fail: 0.7
+    thresholds:
+      clip_score: 0.65
+
+  # Kick está en stub en la fase 1: no graba aunque authorized sea true.
+  - platform: kick
+    handle: "tucanal"
+    url: "https://kick.com/tucanal"
+    authorized: false
+    context: "Canal de ejemplo. Kick no está implementado en la fase 1."
+    weights: {}
+    thresholds: {}
