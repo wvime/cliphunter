@@ -69,6 +69,7 @@ class IngestManager:
                     channel_db_id=int(session.session_meta.get("channel_id") or 0),
                     authorization=session.session_meta.get("authorization"),
                     credit=session.session_meta.get("credit"),
+                    video_id=session.session_meta.get("video_id"),
                 )
             )
         return streams

@@ -44,6 +44,7 @@ class ActiveStream:
     channel_db_id: int
     authorization: dict | None
     credit: str | None = None
+    video_id: str | None = None
 
 
 def to_pynput_hotkey(spec: str) -> str:

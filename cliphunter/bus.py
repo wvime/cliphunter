@@ -15,6 +15,7 @@ STREAM_END = "stream.end"
 SEGMENT_READY = "segment.ready"
 CLIP_CREATED = "clip.created"
 METRICS_SAMPLE = "metrics.sample"
+MOMENT_CANDIDATE = "moment.candidate"
 
 
 @dataclass(frozen=True)

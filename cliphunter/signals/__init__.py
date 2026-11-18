@@ -1,5 +1,5 @@
-"""Signal detectors (placeholder)."""
+"""Windowed signals for automatic clipping."""
 
-from cliphunter.signals.base import SignalDetector, SignalHit
+from cliphunter.signals.base import Signal, SignalDetector, SignalHit, SignalWindow
 
-__all__ = ["SignalDetector", "SignalHit"]
+__all__ = ["Signal", "SignalDetector", "SignalHit", "SignalWindow"]

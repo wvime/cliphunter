@@ -233,14 +233,21 @@ async def create_clip(
     credit: str | None = None,
     status: str = "ready",
     breakdown: dict | None = None,
+    kind: str = "manual",
+    signal_score: float | None = None,
+    selected: list[Segment] | None = None,
 ) -> ClipResult:
     if not index_path.exists():
         raise ClipError(
             f"No hay índice en {index_path}. ¿El canal está en directo y `run` lleva unos segundos grabando?"
         )
     index = SegmentIndex.load(index_path)
-    plan = plan_clip(index, seconds)
+    if selected is not None:
+        plan = plan_from_segments(index, selected, requested_seconds=seconds)
+    else:
+        plan = plan_clip(index, seconds)
     plan.attribution["buffer_index"] = str(index_path.resolve())
+    plan.attribution["channel_key"] = index.channel_key
     if authorization:
         plan.attribution["authorization"] = authorization
     if credit:
@@ -263,13 +270,14 @@ async def create_clip(
         clip_id = await repo.insert_clip(
             channel_id=channel_id,
             session_id=session_id,
-            kind="manual",
+            kind=kind,
             status=status,
             attribution=plan.attribution,
             file_path=str(output.resolve()),
             duration_seconds=duration,
             weight=weight,
             breakdown=breakdown,
+            signal_score=signal_score,
         )
         plan.attribution["clip_id"] = clip_id
         atomic_write_json(sidecar, plan.attribution)

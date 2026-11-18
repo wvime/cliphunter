@@ -30,7 +30,7 @@ from cliphunter.storage.repo import SqliteRepo
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cliphunter",
-        description="Vigila directos y corta clips en local (fase 1).",
+        description="Vigila directos y corta clips solo cuando el momento lo merece.",
     )
     parser.add_argument("--version", action="store_true", help="Muestra la versión y sale.")
     sub = parser.add_subparsers(dest="command")
@@ -66,8 +66,17 @@ def build_parser() -> argparse.ArgumentParser:
     setup.add_argument("--env", default=".env")
 
     sub.add_parser("doctor", help="Comprueba Python, ffmpeg y streamlink.")
-    sub.add_parser("replay", help="Fase posterior: volver a puntuar un buffer.")
-    sub.add_parser("calibrate", help="Fase posterior: ajustar umbrales con las decisiones.")
+
+    replay = sub.add_parser("replay", help="Puntúa un VOD con un volcado de chat.")
+    replay.add_argument("archivo", nargs="?", default=None, help="Vídeo ya grabado, por ejemplo archivo.mp4.")
+    replay.add_argument("--chat", default=None, help="JSON con mensajes (t/ts/offset y text/message).")
+    replay.add_argument("--cut", action="store_true", help="Escribe los momentos con ffmpeg -c copy.")
+    replay.add_argument("--config", default="config.yaml")
+
+    calibrate = sub.add_parser("calibrate", help="Sugiere umbrales y pesos a partir de las decisiones.")
+    calibrate.add_argument("--config", default="config.yaml")
+    calibrate.add_argument("--apply", action="store_true", help="Guarda la sugerencia en calibration.json.")
+    calibrate.add_argument("--canal", default=None, help="Limita la sugerencia a un canal.")
     return parser
 
 
@@ -92,9 +101,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "doctor":
             return doctor()
         if args.command == "replay":
-            replay_command()
+            return replay_command(args)
         if args.command == "calibrate":
-            calibrate_command()
+            return calibrate_command(Path(args.config), apply=bool(args.apply), canal=args.canal)
     except (AuthorizationRequired, ConfigError, ClipError) as exc:
         print(str(exc), file=sys.stderr)
         return 2 if not isinstance(exc, ClipError) else 1

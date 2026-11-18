@@ -15,6 +15,13 @@ buffer_minutes: 10
 segment_seconds: 4
 quality: "480p,720p"
 poll_interval_seconds: 45
+# Detección automática (modo principal). El atajo de abajo es solo un extra.
+auto_clip: true
+signal_window_seconds: 10
+signal_interval_seconds: 2
+clip_min_seconds: 15
+clip_max_seconds: 45
+clip_target_seconds: 30
 hotkey: "ctrl+alt+c"
 hotkey_seconds: 45
 hotkey_debounce_seconds: 3

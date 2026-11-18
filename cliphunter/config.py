@@ -219,6 +219,17 @@ class AppConfig(BaseModel):
     hotkey_debounce_seconds: float = Field(default=3, ge=0, le=60)
     active_channel: str | None = None
     review_port: int = Field(default=8765, ge=1024, le=65535)
+    auto_clip: bool = True
+    signal_window_seconds: float = Field(default=10, gt=0, le=60)
+    signal_interval_seconds: float = Field(default=2, gt=0, le=30)
+    baseline_minutes: float = Field(default=10, gt=0, le=60)
+    clip_min_seconds: float = Field(default=15, gt=0, le=120)
+    clip_max_seconds: float = Field(default=45, gt=0, le=180)
+    clip_target_seconds: float = Field(default=30, gt=0, le=180)
+    clip_pre_roll_seconds: float = Field(default=8, ge=0, le=60)
+    hysteresis: float = Field(default=0.65, gt=0, le=1)
+    transcript_on_trigger: bool = True
+    whisper_model: str = "base"
     title_style: TitleStyle = Field(default_factory=TitleStyle)
     database_path: Path | None = None
     clips_dir: Path | None = None
@@ -278,6 +289,8 @@ class AppConfig(BaseModel):
 
     @model_validator(mode="after")
     def _unique_channels(self) -> AppConfig:
+        if not (self.clip_min_seconds <= self.clip_target_seconds <= self.clip_max_seconds):
+            raise ValueError("clip_min_seconds, clip_target_seconds and clip_max_seconds must be ordered")
         keys = [channel_key(channel) for channel in self.channels]
         duplicates = sorted({key for key in keys if keys.count(key) > 1})
         if duplicates:

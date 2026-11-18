@@ -2,7 +2,6 @@ from pathlib import Path
 
 import pytest
 
-from cliphunter.calibrate import calibrate_command
 from cliphunter.processing import ClipProcessor
 from cliphunter.replay import replay_command
 from cliphunter.review import Decision
@@ -35,10 +34,7 @@ def test_env_example_has_empty_secrets_and_gitignore_covers_env():
 
 
 def test_later_phases_are_explicitly_unimplemented():
-    with pytest.raises(NotImplementedError):
-        replay_command()
-    with pytest.raises(NotImplementedError):
-        calibrate_command()
+    assert replay_command(type("Args", (), {"archivo": None})()) == 2
 
     async def _score() -> None:
         await ClaudeScorer(api_key=None).score(context="", transcript="", signals={})

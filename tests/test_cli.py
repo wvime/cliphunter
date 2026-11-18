@@ -27,6 +27,7 @@ def test_help_documents_run_and_clip(capsys):
 
 
 def test_version_doctor_and_future_commands(capsys):
+    import pytest
     assert main(["--version"]) == 0
     assert "0.1.0" in capsys.readouterr().out
     code = main(["doctor"])
@@ -37,6 +38,11 @@ def test_version_doctor_and_future_commands(capsys):
     assert main(["replay"]) == 2
     assert "replay" in capsys.readouterr().err
     assert main(["calibrate"]) == 2
+    with pytest.raises(SystemExit):
+        main(["replay", "--help"])
+    replay_help = capsys.readouterr().out
+    assert "--chat" in replay_help
+    assert "--cut" in replay_help
 
 
 def test_init_db_and_run_without_authorized_channels(tmp_path, capsys):

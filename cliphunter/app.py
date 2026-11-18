@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import signal
+import time
 from dataclasses import dataclass
 
 import httpx
@@ -18,6 +19,7 @@ from cliphunter.jsonlog import log_event, set_level
 from cliphunter.manager import IngestManager
 from cliphunter.observability import MetricsSampler
 from cliphunter.platforms import build_platforms
+from cliphunter.signals.engine import AutoClipEngine, LiveView
 from cliphunter.storage.repo import SqliteRepo
 from cliphunter.watcher import Watcher
 
@@ -130,6 +132,17 @@ async def run_app(
         _install_signals(stop)
         review = build_review_runtime(repo=repo, config=config, env=env, enable_local=True)
         review_task = asyncio.create_task(review.run(stop), name="review")
+        auto = AutoClipEngine(
+            config=config,
+            repo=repo,
+            bus=bus,
+            channels=plan.channels,
+            on_moment=review.wake,
+        )
+        auto_task = asyncio.create_task(
+            _auto_loop(auto, manager, plan.channels, config, stop),
+            name="auto-clip",
+        )
         hotkey: HotkeyService | None = None
         if hotkey_enabled:
             clipper = HotkeyClipper(
@@ -164,6 +177,7 @@ async def run_app(
             poll_interval_seconds=config.poll_interval_seconds,
             hotkey=config.hotkey if hotkey_enabled else None,
             hotkey_seconds=config.hotkey_seconds,
+            auto_clip=config.auto_clip,
             database=str(config.resolved_database_path()),
             youtube_api_configured=bool(env.youtube_api_key),
             twitch_configured=bool(env.twitch_client_id and env.twitch_client_secret),
@@ -179,16 +193,63 @@ async def run_app(
             if hotkey is not None:
                 await hotkey.aclose()
             stop.set()
+            auto_task.cancel()
             review_task.cancel()
             watcher_task.cancel()
             metrics_task.cancel()
-            await asyncio.gather(review_task, watcher_task, metrics_task, return_exceptions=True)
+            await asyncio.gather(auto_task, review_task, watcher_task, metrics_task, return_exceptions=True)
             await manager_task
         log_event("INFO", "app.stop")
     finally:
         await client.aclose()
         await repo.close()
     return 0
+
+
+async def _auto_loop(engine: AutoClipEngine, manager: IngestManager, channels: list[ChannelConfig], config: AppConfig, stop: asyncio.Event) -> None:
+    """Score live buffers. A detector failure is logged and the loop continues."""
+
+    if not config.auto_clip:
+        log_event("INFO", "auto.disabled")
+        return
+    by_key = {channel_key(channel): channel for channel in channels}
+    cycle = 0
+    while not stop.is_set():
+        started = time.perf_counter()
+        live = manager.live_streams()
+        try:
+            for stream in live:
+                channel = by_key.get(stream.channel_key)
+                view = LiveView(
+                    channel_key=stream.channel_key,
+                    channel_db_id=stream.channel_db_id,
+                    index_path=stream.index_path,
+                    video_id=stream.video_id,
+                    config_id=stream.config_id,
+                    emotes=list(channel.emotes_hype) if channel else [],
+                    weights=dict(channel.weights) if channel else {},
+                    thresholds=dict(channel.thresholds) if channel else {},
+                    credit=stream.credit,
+                    authorization=stream.authorization,
+                )
+                await engine.tick(view, time.time())
+            await engine.learn_from_decisions()
+        except Exception as exc:
+            log_event("ERROR", "auto.tick_failed", error=str(exc))
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        cycle += 1
+        if cycle == 1 or cycle % 15 == 0:
+            log_event(
+                "INFO",
+                "signal.cycle",
+                elapsed_ms=round(elapsed_ms, 1),
+                streams=len(live),
+                channels=[stream.channel_key for stream in live],
+            )
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=float(config.signal_interval_seconds))
+        except TimeoutError:
+            continue
 
 
 async def _wake(review: object) -> None:

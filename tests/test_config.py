@@ -40,6 +40,12 @@ channels:
     names = [channel.display_name for channel in config.authorized_channels()]
     assert names == ["Si"]
     assert config.hotkey == "ctrl+alt+c"
+    assert config.auto_clip is True
+    assert config.signal_window_seconds == 10
+    assert config.signal_interval_seconds == 2
+    assert config.clip_min_seconds == 15
+    assert config.clip_target_seconds == 30
+    assert config.clip_max_seconds == 45
     assert config.hotkey_seconds == 45
     assert config.hotkey_debounce_seconds == 3
     assert config.active_channel is None

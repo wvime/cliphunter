@@ -1,18 +1,20 @@
 # ClipHunter
 
-ClipHunter vigila como mucho **dos directos a la vez**, guarda un buffer rodante en disco y corta clips **sin re-encode**. Esta es la **fase 1**: un solo proceso en Python, asyncio y SQLite. No usa Docker, Redis ni Postgres.
+ClipHunter vigila como mucho **dos directos a la vez**, guarda un buffer rodante en disco y **corta clips solo** cuando el chat, los emotes, el audio, los cambios de plano o los espectadores se disparan. El corte es **sin re-encode**. El atajo de teclado es un extra. Un solo proceso en Python, asyncio y SQLite. No usa Docker, Redis ni Postgres, ni un modelo de lenguaje para decidir el corte.
 
-Pensado para un portátil con Windows 10/11, sin GPU, con Python 3.12, ffmpeg y streamlink ya instalados y en el `PATH`. El objetivo de recursos es quedarse por debajo del 50 % de CPU de la máquina con dos directos en 480p: solo se copia el vídeo, no se decodifica.
+Pensado para un portátil con Windows 10/11, sin GPU, con Python 3.12, ffmpeg y streamlink ya instalados y en el `PATH`. El objetivo de recursos es quedarse por debajo del 50 % de CPU de la máquina con dos directos en 480p: la ingesta solo copia el vídeo. El detector decodifica un PCM a 8 kHz y un plano a 160×90, y solo cuando cierra un segmento.
 
-Los canales pueden hablar inglés o español. El campo `context` acepta texto en cualquiera de los dos idiomas; la fase 1 lo guarda y lo copia en los metadatos del clip para el scorer de más adelante.
+Los canales pueden hablar inglés o español. El campo `context` se guarda y se copia en los metadatos del clip para el scorer de más adelante.
 
-## Qué hace la fase 1
+## Qué hace ahora
 
 - Lee un YAML validado con Pydantic. Solo entran canales con `authorized: true`.
 - Al arrancar `run`, pregunta una vez por canal: **¿confirmas que este canal está autorizado?** Si respondes que no, ese canal no se vigila. `--yes` salta la pregunta (tareas no interactivas).
 - YouTube: detecta directo/offline sin gastar cuota de la Data API en el sondeo. Twitch usa Helix si hay credenciales. Kick está en stub.
 - Por cada directo, una tarea asyncio lanza `streamlink` hacia `ffmpeg` con `-c copy`, segmentos de unos 4 s y un buffer de 10 minutos que se borra solo.
-- `clip` corta los últimos N segundos **mientras `run` sigue grabando**. Los dos procesos comparten `index.json` en disco y la misma base SQLite (modo WAL).
+- Cada 2 s puntúa una ventana de 10 s. Si supera el umbral, corta 15–45 s alrededor del pico (`kind=auto`) y lo manda a la cola de Telegram.
+- `clip` y el atajo siguen cortando a mano **mientras `run` graba**. Comparten `index.json` y la misma base SQLite (modo WAL).
+- Las aprobaciones y los rechazos mueven el umbral. `calibrate` propone pesos. `replay` ensaya la misma lógica sobre un VOD.
 - Métricas de CPU y RAM por directo (psutil) y logs en JSON, una línea por evento.
 
 ## Instalación en Windows
@@ -171,9 +173,67 @@ La pregunta se hace **una vez por canal al lanzar el proceso**, antes de grabar.
 
 Para el proceso con Ctrl+C. Así manda `terminate()` a streamlink y a ffmpeg. Si matas el proceso a la fuerza, esos hijos pueden quedarse un rato hasta que el sistema los cierre.
 
+## Modo automático
+
+El programa **corta solo**. El atajo de teclado es un extra, no el modo principal.
+
+Cada 2 segundos (`signal_interval_seconds`) se mira una ventana de 10 s (`signal_window_seconds`) y cada señal se compara con su propia línea base de 10 minutos (`baseline_minutes`), por canal. El resultado es un z-score. La suma usa los pesos del canal y, si falta una señal, se reparte el peso entre las que sí respondieron:
+
+| Señal | Peso | De dónde sale |
+| --- | --- | --- |
+| `chat` / `chat_velocity` | 0.35 | mensajes de chat por segundo |
+| `emotes` / `emote_burst` | 0.25 | 😂 🤣 💀 🔥, `JAJAJA` / `jajaja`, y el mismo texto repetido 4 veces o más |
+| `audio` / `audio_energy` | 0.30 | RMS del segmento nuevo, PCM mono a 8 kHz. Un pico de risa entra aquí como energía, sin un modelo aparte |
+| `scene` / `scene_change` | 0.05 | filtro `scene` de ffmpeg a 160×90 y 2 fps, solo cuando cierra un segmento |
+| `viewers` / `viewer_delta` | 0.05 | espectadores simultáneos, como mucho una vez por minuto |
+
+En YouTube el chat **no** usa `liveChatMessages.list`. Esa llamada gasta cuota y no cabe en un sondeo de 2 s. Se usa el endpoint público de Innertube (`youtubei/v1/live_chat/get_live_chat`), el mismo tipo de sondeo que pytchat, y no descuenta cuota de la Data API. Si el chat o los espectadores fallan, se anotan como degradados y el resto sigue. La grabación no se para.
+
+El momento se abre cuando la suma pasa `thresholds.signal_score` (en Alofoke, 2.5; si no está, se usa `clip_score`, y si tampoco, 2.5). Se cierra cuando baja de umbral × `hysteresis` (0.65) o cuando el momento ya dura `clip_max_seconds`. Después hay `cooldown_s` segundos (45) sin otro corte.
+
+El clip sale **sin re-encode** (`-c copy`), `kind=auto`, `status=pending`. La duración se elige alrededor del pico: un poco antes de la subida (`clip_pre_roll_seconds`, 8 s) y hasta que la puntuación cae, con objetivo `clip_target_seconds` (30) y límites `clip_min_seconds` / `clip_max_seconds` (15 y 45). Entra en la misma cola de Telegram, con el desglose de señales. El bus publica `moment.candidate`.
+
+La transcripción (faster-whisper, CPU, int8, modelo `whisper_model`, por defecto `base`; se puede poner `small`) se lanza **después** del corte, sobre el último minuto, español o inglés. Si el paquete no está instalado, el clip se guarda igual. Para activarla: `pip install faster-whisper`. `transcript_on_trigger: false` la apaga.
+
+```yaml
+auto_clip: true
+signal_window_seconds: 10
+signal_interval_seconds: 2
+baseline_minutes: 10
+clip_min_seconds: 15
+clip_max_seconds: 45
+clip_target_seconds: 30
+clip_pre_roll_seconds: 8
+hysteresis: 0.65
+transcript_on_trigger: true
+whisper_model: base
+```
+
+`auto_clip: false` deja la grabación y el atajo, sin cortes automáticos.
+
+Cada decisión de Telegram queda guardada con el breakdown. Con el proceso en marcha, 3 rechazos seguidos suben el umbral de ese canal un 8 % y 2 aprobaciones lo bajan un 5 %. El movimiento se queda entre la mitad y el doble del umbral inicial, se escribe en `calibration.json` (al lado de la base) y sale en el log `calibrate.nudge`. Un corte de atajo no cuenta para ese empujón.
+
+Para una sugerencia con todas las decisiones, donde el atajo pesa 3:
+
+```powershell
+python -m cliphunter calibrate --config config.yaml
+python -m cliphunter calibrate --config config.yaml --apply
+```
+
+`--apply` guarda umbral y pesos en `calibration.json`. No reescribe el YAML. El siguiente `run` los usa.
+
+Para probar la misma lógica sobre un VOD:
+
+```powershell
+python -m cliphunter replay archivo.mp4 --chat chat.json
+python -m cliphunter replay archivo.mp4 --chat chat.json --cut
+```
+
+El JSON es una lista de `{ "t": 12.5, "text": "JAJAJA" }` (también valen `ts`/`offset` y `message`). `--cut` escribe mp4 con `-c copy` en la carpeta de clips. Sirve para calibrar sin estar en directo. El chat del replay no lleva audio ni escena: esas señales se marcan degradadas.
+
 ## Atajo de teclado
 
-Con `run` en marcha, **Ctrl+Alt+C** corta el directo activo. Usa el mismo camino que `clip` (ffmpeg `-c copy`, sin re-encode) y guarda el mp4 con `kind=manual`. Además anota un peso de calibración **3.0** en la fila del clip y en `decisions` (`action=approve`, `note=hotkey`), para que más adelante pese más que un corte automático.
+Opcional. Con `run` en marcha, **Ctrl+Alt+C** corta el directo activo. Usa el mismo camino que `clip` (ffmpeg `-c copy`, sin re-encode) y guarda el mp4 con `kind=manual`. Además anota un peso de calibración **3.0** en la fila del clip y en `decisions` (`action=approve`, `note=hotkey`), así que en `calibrate` pesa más que un corte automático.
 
 - Si solo hay un directo, corta ese.
 - Si hay dos, corta `active_channel` cuando está puesto (en el ejemplo de Alofoke es `alofoke`). Si no, corta el que empezó más tarde.
@@ -214,7 +274,7 @@ python -m cliphunter telegram-setup --config config.yaml
 
 Eso guarda el chat id en `telegram_chat.json`, al lado de la base. Solo se aceptan botones de ese chat.
 
-2. Con `run` en marcha, cada clip manual (atajo o `clip`) entra en cola (`status=pending`). El proceso hace long polling: no hace falta un webhook público. El mensaje lleva el mp4, una leyenda (canal, marcas de tiempo, score y breakdown si existen) y los botones **Aprobar**, **Rechazar**, **Ajustar -5s inicio**, **Ajustar +5s inicio**, **Ajustar -5s fin** y **Ajustar +5s fin**.
+2. Con `run` en marcha, cada clip (automático, atajo o `clip`) entra en cola (`status=pending`). El proceso hace long polling: no hace falta un webhook público. El mensaje lleva el mp4, una leyenda (canal, marcas de tiempo, score y breakdown si existen) y los botones **Aprobar**, **Rechazar**, **Ajustar -5s inicio**, **Ajustar +5s inicio**, **Ajustar -5s fin** y **Ajustar +5s fin**.
 
 3. Un ajuste vuelve a cortar el buffer **sin re-encode** (segmentos enteros, así que puede pasarse de 5 s) y reenvía la vista previa. Cada decisión queda en `decisions` con los segundos del ajuste y el breakdown de la señal, si lo hay.
 
@@ -238,7 +298,7 @@ python -m cliphunter clip --config config.yaml --canal TuCanal --ultimos 45
 
 `--canal` acepta el handle (`TuCanal` o `@TuCanal`) o la clave (`youtube_TuCanal`). `--ultimos` son segundos.
 
-El mp4 y un JSON con la atribución quedan en `C:\cliphunter\clips\`. El JSON y la fila de SQLite incluyen streamer, plataforma, URL, título del directo, contexto del canal, las marcas de tiempo y, si el canal lo trae, el bloque `authorization` (`tipo`, `fuente`, `fecha`). `kind` queda en `manual` y `status` en `ready`.
+El mp4 y un JSON con la atribución quedan en `C:\cliphunter\clips\`. El JSON y la fila de SQLite incluyen streamer, plataforma, URL, título del directo, contexto del canal, las marcas de tiempo y, si el canal lo trae, el bloque `authorization` (`tipo`, `fuente`, `fecha`). `kind` queda en `manual` y `status` en `pending`, para la misma cola que los cortes automáticos.
 
 `run` escribe `C:\cliphunter\buffer\<canal>\index.json` con reemplazo atómico (`os.replace`). `clip` lee ese fichero; no hace falta un puerto de control. El segmento que ffmpeg todavía está escribiendo (unos 4 s en el borde del directo) no entra en el corte.
 
@@ -272,8 +332,9 @@ Cada evento es un JSON en stdout. Una muestra de métricas se parece a esto:
 }
 ```
 
-- `system_cpu_pct` es el uso de **toda la máquina**, de 0 a 100. Es el número que hay que comparar con el objetivo de menos del 50 %.
-- `cpu_pct` de cada directo suma streamlink y ffmpeg según psutil. Puede pasar de 100 si un proceso usa más de un núcleo.
+- `system_cpu_pct` es el uso de **toda la máquina**, de 0 a 100. Es el número que hay que comparar con el objetivo de menos del 50 % con 2 directos.
+- `cpu_pct` y `rss_mb` de cada directo suman streamlink y ffmpeg según psutil. Puede pasar de 100 si un proceso usa más de un núcleo.
+- `signal.cycle` dice cuántos milisegundos costó la pasada del detector (chat, audio y escena de los directos que haya). Audio y escena solo se calculan cuando aparece un segmento nuevo, a 8 kHz y 160×90.
 - La primera muestra de un proceso suele salir a 0: psutil necesita dos lecturas.
 - Esas filas también se guardan en la tabla `metrics` (`cpu_pct`, `rss_mb`, y el desglose en `extra_json`).
 
@@ -294,30 +355,28 @@ En Linux es el mismo comando (`python3 -m venv .venv`, `source .venv/bin/activat
 
 Un proceso. El bus es una interfaz (`EventBus`) con colas `asyncio.Queue`. El almacén es una interfaz (`Repo`) implementada con aiosqlite. Cambiar a Redis o Postgres es sustituir esas clases, no el watcher ni el clipper.
 
-Eventos ya publicados: `stream.start`, `stream.end`, `segment.ready`, `clip.created`, `metrics.sample`.
+Eventos ya publicados: `stream.start`, `stream.end`, `segment.ready`, `clip.created`, `metrics.sample`, `moment.candidate`.
 
-| Pieza | Estado en la fase 1 |
+| Pieza | Estado |
 | --- | --- |
 | `config`, `bus`, `storage`, `watcher`, `ingest`, `clip`, `hotkey`, `observability` | Implementado |
 | YouTube y Twitch (`platforms/`) | Implementado |
 | Kick (`platforms/kick.py`) | Stub, misma interfaz |
-| `signals/` | Interfaz `SignalDetector`. Nadie la llama todavía |
+| `signals/` | Chat, emotes, audio, escena, viewers, corte automático |
+| `calibrate`, `replay` | Implementados. `calibrate --apply` escribe `calibration.json` |
 | `scoring.py` (`ClaudeScorer`) | Interfaz. No hay llamadas a Anthropic |
 | `review/` | Telegram (@clipowii_bot) y página local en `127.0.0.1`. El 9:16 y Claude siguen después |
 | `processing/` | El 9:16 no se renderiza. `title_style` ya describe la caja del título |
-| `replay`, `calibrate` | Comandos que explican que llegan después |
 
-Las tablas `clips` (`kind` manual\|auto, `signal_score`, `weight`, `breakdown_json`, `title`, `hook`, `hashtags`) y `decisions` (`weight`) guardan el corte del atajo como muestra de calibración. El scorer y Telegram las reutilizarán.
+Las tablas `clips` (`kind` manual\|auto, `signal_score`, `weight`, `breakdown_json`, `title`, `hook`, `hashtags`) y `decisions` (`weight`, `breakdown_json`) guardan el corte y la decisión. El atajo pesa 3. El scorer de Claude las reutilizará.
 
 ## Hoja de ruta
 
-1. **Atajo global Ctrl+Alt+C**: ya está en `run` (esta fase). Se puede cambiar el combo y los segundos en el YAML.
-2. **Señales en tiempo real** (audio, chat, picos) sobre `segment.ready`.
-3. **Scorer con Claude**, usando `context`, `weights` y `thresholds` del canal. El título, el hook y los hashtags del clip salen de ahí.
-4. **Revisión por Telegram**: botones Approve, Reject y Adjust ±5 s. Eso escribe en `decisions`.
-5. **Procesado pesado solo al aprobar**: reencuadre 9:16, subtítulos y título quemado. El estilo ya está en `title_style` (caja blanca redondeada arriba, texto negro en negrita, nombre de `{sujeto}` en amarillo). La fuente por defecto es **Montserrat Black** (licencia OFL), incluida en `assets/fonts/Montserrat-Black.ttf`. `font` y `font_file` se pueden cambiar; ffmpeg y ASS recibirán la ruta absoluta de ese `.ttf`, así que no hace falta instalar la fuente en Windows. `{sujeto}` lo devolverá Claude. Hoy no se dibuja, y no afecta al atajo ni a Telegram.
-6. **`python -m cliphunter calibrate`**: ajustar umbrales con las decisiones ya guardadas.
-7. **`python -m cliphunter replay`**: volver a puntuar un buffer que ya está en disco.
+1. **Corte automático** (esta fase): chat, emotes, audio, escena y viewers, sin LLM. El atajo sigue disponible como extra.
+2. **Revisión por Telegram**: ya está. Aprobar, rechazar y ajustar ±5 s escriben en `decisions` y mueven el umbral.
+3. **`calibrate` y `replay`**: ya están, para ajustar pesos con las decisiones y para ensayar sobre un VOD.
+4. **Scorer con Claude**, usando el `moment.candidate` (incluida la transcripción si faster-whisper está instalado), `context`, `weights` y `thresholds`. El título, el hook y los hashtags del clip salen de ahí.
+5. **Procesado pesado solo al aprobar**: reencuadre 9:16, subtítulos y título quemado. El estilo ya está en `title_style` (caja blanca redondeada arriba, texto negro en negrita, nombre de `{sujeto}` en amarillo). La fuente por defecto es **Montserrat Black** (licencia OFL), incluida en `assets/fonts/Montserrat-Black.ttf`. `font` y `font_file` se pueden cambiar; ffmpeg y ASS recibirán la ruta absoluta de ese `.ttf`, así que no hace falta instalar la fuente en Windows. `{sujeto}` lo devolverá Claude. Hoy no se dibuja.
 
 ## Limitaciones conocidas
 
@@ -330,5 +389,6 @@ Las tablas `clips` (`kind` manual\|auto, `signal_score`, `weight`, `breakdown_js
 - Si la única calidad disponible es muy alta y tampoco existe `worst`, streamlink no abre el directo. No subimos a 1080p a propósito.
 - Un `kill -9` / cierre brusco puede dejar streamlink o ffmpeg vivos. Para el programa con Ctrl+C.
 - La confirmación es por ejecución, no un registro legal más allá de `confirmed_authorized_at`.
-- El atajo global depende de pynput y de una sesión de escritorio. Sin eso, `run` arranca igual y lo dice en el log. El aviso visual del sistema solo aparece si está `plyer` o `win11toast`.
-- `replay` y `calibrate` todavía no hacen nada.
+- El atajo global depende de pynput y de una sesión de escritorio. Sin eso, `run` arranca igual y lo dice en el log. El aviso visual del sistema solo aparece si está `plyer` o `win11toast`. El corte automático no depende del atajo.
+- La transcripción no se descarga en las pruebas. Sin `faster-whisper` el clip se corta igual y el log avisa una vez.
+- El chat de YouTube depende de que la página pública de live chat siga exponiendo el token de continuación. Si cambia, esa señal se degrada y las demás siguen.
