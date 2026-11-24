@@ -8,6 +8,16 @@ from difflib import SequenceMatcher
 
 _TOKEN = re.compile(r"[0-9A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+", re.UNICODE)
 NEUTRAL = "un participante"
+# Ordinary Spanish words that must never count as a person, even if the spelling is close.
+STOPWORDS = frozenset(
+    """
+    a al algo alguna algunas alguno algunos ante aquel aquella aquellas aquellos
+    como con contra cual cuales cuando de del desde donde dos el ella ellas ellos
+    en entre era es esa esas ese esos esta estas este estos fue gran ha han hasta
+    hay la las le les lo los mas más me mi mis muy ni no nos o os para pero por
+    porque que se sea ser si sí sin sobre su sus te ti tu tus un una uno y ya
+    """.split()
+)
 
 
 def fold(text: str) -> str:
@@ -22,58 +32,54 @@ def _ratio(left: str, right: str) -> float:
     return SequenceMatcher(None, fold(left), fold(right)).ratio()
 
 
-def name_said(name: str, transcript: str, *, threshold: float = 0.8) -> bool:
-    """True when ``name`` or a close whisper spelling is in ``transcript``."""
+def name_said(name: str, transcript: str, *, threshold: float = 0.92) -> bool:
+    """Side lookup only. Never used to rewrite the transcript.
+
+    Fuzzy matches ignore stopwords, so ``gran`` cannot become ``Germán``.
+    """
 
     if not name or not transcript:
         return False
     needle = fold(name).strip()
+    if needle in STOPWORDS or len(needle) < 3:
+        return False
     hay = fold(transcript)
-    if len(needle) >= 3 and needle in hay:
+    if needle in hay:
         return True
-    tokens = _TOKEN.findall(hay)
-    parts = [part for part in needle.split() if len(part) >= 3]
+    if len(needle) < 4:
+        return False
+    tokens = [token for token in _TOKEN.findall(hay) if token not in STOPWORDS and len(token) >= 4]
+    parts = [part for part in needle.split() if part not in STOPWORDS and len(part) >= 4]
     if not parts:
         return False
-    if len(parts) == 1:
-        return any(_ratio(token, parts[0]) >= threshold for token in tokens if len(token) >= 4)
-    return all(any(_ratio(token, part) >= threshold for token in tokens if len(token) >= 3) for part in parts)
+    return all(
+        any(_ratio(token, part) >= threshold and abs(len(token) - len(part)) <= 2 for token in tokens)
+        for part in parts
+    )
 
 
 def supported_names(transcript: str, people: list[dict]) -> list[str]:
     found: list[str] = []
     for person in people:
-        labels = [str(person.get("name") or "")]
-        labels.extend(str(nick) for nick in (person.get("nicknames") or []))
-        if any(name_said(label, transcript) for label in labels if label.strip()):
-            canonical = str(person.get("name") or labels[0]).strip()
+        if any(name_said(token, transcript) for token in protected_tokens([person])):
+            canonical = str(person.get("name") or "").strip()
             if canonical and canonical not in found:
                 found.append(canonical)
     return found
 
 
-def correct_tokens(text: str, names: list[str], *, threshold: float = 0.8) -> str:
-    """Replace a whisper token with a participant name when the spelling is close."""
+def protected_tokens(people: list[dict]) -> list[str]:
+    """First names, last names, and apodos. Stopwords are not names."""
 
-    if not text or not names:
-        return text
-    canon = [name for name in names if len(fold(name)) >= 4]
-
-    def _swap(match: re.Match[str]) -> str:
-        token = match.group(0)
-        if len(token) < 4:
-            return token
-        best = ""
-        best_score = 0.0
-        for name in canon:
-            score = _ratio(token, name.split()[0] if " " not in fold(token) else name)
-            if score > best_score:
-                best, best_score = name.split()[0] if " " in name and " " not in token else name, score
-        if best and best_score >= threshold and fold(token) != fold(best):
-            return best
-        return token
-
-    return _TOKEN.sub(_swap, text)
+    found: list[str] = []
+    for person in people:
+        labels = [str(person.get("name") or "")]
+        labels.extend(str(nick) for nick in (person.get("nicknames") or []))
+        for label in labels:
+            for part in fold(label).split():
+                if len(part) >= 4 and part not in STOPWORDS and part not in found:
+                    found.append(part)
+    return found
 
 
 def ground_verdict(verdict, transcript: str, people: list[dict]):
@@ -90,14 +96,7 @@ def ground_verdict(verdict, transcript: str, people: list[dict]):
             if canonical not in participants:
                 participants.append(canonical)
     blocked = [name for name in verdict.participants if fold(name) not in {fold(item) for item in participants}]
-    blob = " ".join(part for part in (verdict.title, verdict.hook, verdict.why, verdict.sujeto) if part)
-    for person in people:
-        official = str(person.get("name") or "")
-        if not official or fold(official) in allowed_fold:
-            continue
-        labels = [official, *[str(nick) for nick in (person.get("nicknames") or [])]]
-        if any(label and fold(label) in fold(blob) for label in labels):
-            blocked.append(official)
+    blocked.extend(token for token in protected_tokens(people) if not name_said(token, transcript))
     title = _scrub(verdict.title, blocked)
     hook = _scrub(verdict.hook, blocked)
     why = _scrub(verdict.why, blocked)

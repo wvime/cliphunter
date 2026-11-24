@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from cliphunter.editorial.audio import s16le_to_floats
+from cliphunter.editorial.audio import s16le_to_floats, transcribe_kwargs
+from cliphunter.editorial.dedupe import merge_overlapping
+from cliphunter.editorial.names import name_said
 from cliphunter.editorial.bounds import Line, Word, clip_bounds
 from cliphunter.editorial.archive import retain_clip, shifted_bounds
 from cliphunter.editorial.compare import Pick, live_sim_windows, picks_from_directory, render_report, render_table
@@ -464,6 +466,107 @@ def test_pending_clip_segments_stay_after_the_buffer_drops_them(tmp_path: Path):
     assert (stored.parent / "s1.ts").exists()
     start, end = shifted_bounds(segments[1].wall_start, segments[2].wall_end, "fin", 5)
     assert end > parse_end(segments[2].wall_end)
+
+
+def test_transcript_text_is_not_rewritten_and_common_words_are_not_names():
+    assert name_said("Germán", "del gran trabajo") is False
+    assert name_said("La Mella", "Nesy, que sea ella") is False
+    kwargs = transcribe_kwargs(["Frenny", "Yulisa", "Toki"], "es")
+    assert kwargs["initial_prompt"] == "Nombres: Frenny, Yulisa, Toki"
+    assert kwargs["hotwords"] == "Frenny Yulisa Toki"
+    assert kwargs["word_timestamps"] is True
+    assert "bomberos" not in Path("cliphunter/editorial/prompts/director_v3.md").read_text(encoding="utf-8")
+    assert "director_v3" in Path("cliphunter/editorial/prompts/director_v3.md").read_text(encoding="utf-8")
+
+
+def test_bare_first_name_is_grounded():
+    verdict = EditorialVerdict(
+        mode="editorial",
+        title="Alondra se quedó callada",
+        hook="Alondra",
+        why="Alondra no dijo nada",
+        sujeto="Alondra",
+        participants=["Alondra Carvajal"],
+        total=70,
+    )
+    grounded = ground_verdict(
+        verdict,
+        "pa la intimidad",
+        [{"name": "Alondra Carvajal", "nicknames": ["Aló"]}],
+    )
+    assert "Alondra" not in (grounded.title or "")
+    assert "Aló" not in (grounded.hook or "")
+    assert grounded.participants == []
+    assert grounded.sujeto is None
+
+
+def test_long_segment_ends_after_the_reaction_not_at_the_next_question():
+    words = (
+        Word(0.2, 0.5, "pa"),
+        Word(0.6, 0.8, "la"),
+        Word(0.9, 1.5, "intimidad."),
+        Word(1.7, 2.4, "jajaja"),
+        Word(4.8, 5.4, "Wilson"),
+        Word(5.5, 6.2, "cómo"),
+        Word(6.3, 7.0, "estás?"),
+    )
+    segment = Line(0.0, 30.0, "pa la intimidad. jajaja Wilson cómo estás?", words)
+    _start, end, _payoff = clip_bounds(
+        [segment],
+        0.4,
+        1.2,
+        2.0,
+        min_seconds=1,
+        max_seconds=60,
+        payoff_quote="intimidad",
+    )
+    assert end < 4.8
+    assert end >= 1.5
+
+
+def test_overlapping_scores_use_the_mean_and_the_better_centered_bounds():
+    first = Pick(start=0, end=40, score=62.1, accepted=True, extra={"moment": 30})
+    second = Pick(start=10, end=30, score=74.7, accepted=True, extra={"moment": 20})
+    merged = merge_overlapping(first, second)
+    assert merged.score == 68.4
+    assert (merged.start, merged.end) == (10, 30)
+
+
+async def test_empty_judge_response_retries_then_marks_judge_error():
+    calls = {"n": 0}
+
+    async def _empty(_packet):
+        calls["n"] += 1
+        return ""
+
+    verdict = await ClaudeJudge(None, complete=_empty, backoff=0, resample=False).judge({"transcript": []})
+    assert calls["n"] == 3
+    assert verdict.mode == "judge_error"
+    assert verdict.total is None
+
+    calls["n"] = 0
+
+    async def _then_ok(_packet):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return ""
+        return json.dumps(
+            {
+                "category": "humor",
+                "participants": [],
+                "setup_start": 1,
+                "payoff": 2,
+                "end": 4,
+                "components": {"event_strength": 20, "reaction_quality": 10, "cultural_relevance": 8,
+                               "opening_hook": 8, "standalone_clarity": 6, "meme_potential": 5,
+                               "audience_engagement": None},
+            }
+        )
+
+    recovered = await ClaudeJudge(None, complete=_then_ok, backoff=0, resample=False).judge({"transcript": []})
+    assert calls["n"] == 3
+    assert recovered.mode == "editorial"
+    assert recovered.total and recovered.total > 0
 
 
 def parse_end(value: str) -> float:

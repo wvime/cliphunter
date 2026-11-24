@@ -234,6 +234,8 @@ class AppConfig(BaseModel):
     editorial_model: str = "claude-haiku-4-5"
     editorial_before_seconds: float = Field(default=90, ge=10, le=300)
     editorial_after_seconds: float = Field(default=30, ge=0, le=120)
+    editorial_packet_before: float = Field(default=45, ge=5, le=180)
+    editorial_packet_after: float = Field(default=20, ge=2, le=90)
     editorial_sweep_seconds: float = Field(default=30, ge=5, le=300)
     editorial_min_score: float = Field(default=65, ge=0, le=100)
     editorial_story_floor: float = Field(default=50, ge=0, le=100)

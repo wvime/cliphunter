@@ -54,7 +54,7 @@ class EditorialDirector:
         self._context = ""
         self._feedback = ""
         self._context_at = 0.0
-        self._sent: list[tuple[float, float]] = []
+        self._sent: list[dict] = []
 
     async def poll(self, state, now: float) -> None:
         await self._transcribe_new(state)
@@ -92,15 +92,20 @@ class EditorialDirector:
         if pending is None or now + 1e-6 < pending["ready_at"]:
             return
         self.pending.pop(key, None)
-        lines = self._window_lines(state, now)
-        t0 = lines[0].start if lines else now - self.config.editorial_before_seconds
+        moment = float(pending.get("at") or now)
+        lines = self._centered_lines(state, moment)
+        t0 = lines[0].start if lines else moment - self.config.editorial_packet_before
         packet = {
             "t0": t0,
             "transcript": [
                 {"start": round(line.start - t0, 2), "end": round(line.end - t0, 2), "text": line.text}
                 for line in lines
             ],
-            "chat": [message.text for message in state.messages if now - self.config.editorial_before_seconds <= message.t <= now],
+            "chat": [
+                message.text
+                for message in state.messages
+                if moment - self.config.editorial_packet_before <= message.t <= moment + self.config.editorial_packet_after
+            ],
             "signals": (pending.get("tick").parts if pending.get("tick") is not None else {}),
             "signal_score": (pending.get("tick").score if pending.get("tick") is not None else None),
             "cues": pending.get("trigger"),
@@ -110,6 +115,8 @@ class EditorialDirector:
         packet["people"] = await self._people(now)
         packet["storylines"] = await self._storyline_titles(now)
         verdict = await self.judge.judge(packet)
+        if verdict.mode == "judge_error":
+            log_event("ERROR", "editorial.judge_error", channel=key, moment=moment)
         if verdict.mode != "editorial":
             state.editorial_mode = "signal-only"
             if pending.get("tick") is not None:
@@ -144,22 +151,77 @@ class EditorialDirector:
             payoff_quote=verdict.payoff_quote,
             reaction_cap=self.config.editorial_reaction_cap,
         )
-        from cliphunter.editorial.dedupe import overlaps_saved
+        from cliphunter.editorial.dedupe import center_distance, overlaps_saved
+        from cliphunter.editorial.judge import _average
 
-        if self._overlaps_range(start, end) or await overlaps_saved(self.repo, state.view.channel_db_id, start, end):
-            log_event("INFO", "editorial.duplicate", channel=key, start=start, end=end)
+        previous = self._find_sent(start, end)
+        if previous is not None:
+            merged = _average(previous["verdict"], verdict, packet, minimum=self.config.editorial_min_score, floor=self.config.editorial_story_floor)
+            distance = center_distance(start, end, moment)
+            if distance < previous["distance"]:
+                previous["distance"] = distance
+            previous["verdict"] = merged
+            await self._store_merged_score(previous.get("clip_id"), merged)
+            log_event(
+                "INFO",
+                "editorial.duplicate",
+                channel=key,
+                start=start,
+                end=end,
+                score=merged.total,
+                rule="mean",
+            )
             return
-        await self._save(state, start, end, payoff, verdict, pending.get("trigger") or "")
-        self._sent.append((start, end))
+        if await overlaps_saved(self.repo, state.view.channel_db_id, start, end):
+            log_event("INFO", "editorial.duplicate", channel=key, start=start, end=end, rule="already_saved")
+            return
+        clip_id = await self._save(state, start, end, payoff, verdict, pending.get("trigger") or "")
+        self._sent.append(
+            {
+                "start": start,
+                "end": end,
+                "clip_id": clip_id,
+                "verdict": verdict,
+                "moment": moment,
+                "distance": center_distance(start, end, moment),
+            }
+        )
         state.cooldown_until = now + channel_cooldown(state.view.thresholds)
 
-    def _overlaps_range(self, start: float, end: float) -> bool:
-        for left, right in self._sent:
-            overlap = min(end, right) - max(start, left)
-            shorter = min(end - start, right - left)
-            if shorter > 0 and overlap / shorter >= 0.3:
-                return True
-        return False
+    def _find_sent(self, start: float, end: float) -> dict | None:
+        from cliphunter.editorial.dedupe import ranges_overlap
+
+        for item in self._sent:
+            if ranges_overlap(start, end, item["start"], item["end"]):
+                return item
+        return None
+
+    def _centered_lines(self, state, moment: float) -> list:
+        start = moment - self.config.editorial_packet_before
+        end = moment + self.config.editorial_packet_after
+        return [
+            line
+            for line in self.lines.get(state.view.channel_key, [])
+            if line.end >= start and line.start <= end
+        ]
+
+    async def _store_merged_score(self, clip_id: int | None, verdict) -> None:
+        if not clip_id:
+            return
+        row = await self.repo.get_clip(clip_id)
+        if row is None:
+            return
+        import json
+
+        attribution = json.loads(row.get("attribution_json") or "{}")
+        attribution["viral_score"] = verdict.total
+        attribution["score_rule"] = "mean"
+        await self.repo.update_clip(
+            clip_id,
+            attribution=attribution,
+            signal_score=verdict.total,
+            breakdown=verdict.public_dict(),
+        )
 
     async def _save(self, state, start: float, end: float, payoff: float, verdict, trigger: str) -> None:
         output = self.config.resolved_clips_dir() / f"{state.view.channel_key}_edit_{int(start)}.mp4"
@@ -189,7 +251,7 @@ class EditorialDirector:
                 "payoff": payoff,
                 "trigger": trigger,
                 "prompt_version": verdict.prompt_version,
-            "event_mode": self.config.event_mode,
+                "event_mode": self.config.event_mode,
                 "transcript_lines": [
                     {"start": line.start, "end": line.end, "text": line.text}
                     for line in self.lines.get(state.view.channel_key, [])
@@ -241,6 +303,7 @@ class EditorialDirector:
         if self.engine.on_moment is not None:
             self.engine.on_moment()
         log_event("INFO", "editorial.candidate", channel=state.view.channel_key, clip_id=clip_id, score=verdict.total)
+        return clip_id
 
     async def _transcribe_new(self, state) -> None:
         if not whisper_available() or not state.view.index_path.exists():

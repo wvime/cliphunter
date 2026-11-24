@@ -77,7 +77,7 @@ def compare_command(args) -> int:
             note += " No hay transcripción de audio en este reporte (falta faster-whisper o el archivo no se pudo leer)."
     judged = list(accepted) + list(rejected)
     if getattr(args, "live_sim", False):
-        judged = _live_sim_candidates(config, env.anthropic_api_key, lines, duration) or judged
+        judged = _live_sim_candidates(config, env.anthropic_api_key, lines, duration, Path(video)) or judged
     people = _load_people(config)
     if people:
         note += "\n\nFicha: " + ", ".join(person["name"] for person in people)
@@ -115,7 +115,17 @@ def _audio_old_picks(video: Path) -> list[Pick]:
     return energy_picks(samples)
 
 
-def _live_sim_candidates(config, api_key: str | None, lines: list[Line], duration: float) -> list[Pick]:
+def _centered(lines: list[Line], moment: float, before: float, after: float) -> list[Line]:
+    return [line for line in lines if line.end >= moment - before and line.start <= moment + after]
+
+
+def _live_sim_candidates(config, api_key: str | None, lines: list[Line], duration: float, video: Path | None = None) -> list[Pick]:
+    """Same decisions as live: centered packet, participant list, bounds, dedupe, then a real cut."""
+
+    from cliphunter.editorial.bounds import clip_bounds
+    from cliphunter.editorial.dedupe import merge_overlapping, ranges_overlap
+
+    people = _load_people(config)
     windows = live_sim_windows(
         duration,
         sweep=config.editorial_sweep_seconds,
@@ -123,30 +133,39 @@ def _live_sim_candidates(config, api_key: str | None, lines: list[Line], duratio
         after=config.editorial_after_seconds,
         cooldown=45,
     )
-    picks: list[Pick] = []
-    if not api_key:
-        for start, end, _mark in windows:
-            window_lines = [line for line in lines if line.end >= start and line.start <= end]
-            cues = find_cues(window_lines, [])
-            picks.append(
-                Pick(
-                    start=start,
-                    end=end,
-                    trigger="live-sim",
-                    why="sin ANTHROPIC_API_KEY" if not cues else "pista " + ",".join(cues) + "; sin clave",
-                    accepted=False,
-                )
-            )
-        return picks
-    from cliphunter.editorial.judge import ClaudeJudge
+    before = config.editorial_packet_before
+    after = config.editorial_packet_after
+    drafts: list[Pick] = []
+    judge = None
+    if api_key:
+        from cliphunter.editorial.judge import ClaudeJudge
 
-    judge = ClaudeJudge(api_key, model=config.editorial_model, minimum=config.editorial_min_score, resample=False)
+        judge = ClaudeJudge(
+            api_key,
+            model=config.editorial_model,
+            minimum=config.editorial_min_score,
+            floor=config.editorial_story_floor,
+            resample=False,
+            backoff=0,
+        )
 
-    async def _run() -> list[Pick]:
+    async def _judge_all() -> list[Pick]:
         found: list[Pick] = []
-        for start, end, _mark in windows[:8]:
-            window_lines = [line for line in lines if line.end >= start and line.start <= end]
-            t0 = window_lines[0].start if window_lines else start
+        for _start, _end, moment in windows[:8]:
+            window_lines = _centered(lines, moment, before, after)
+            if judge is None:
+                found.append(
+                    Pick(
+                        start=max(0.0, moment - before),
+                        end=min(duration, moment + after),
+                        trigger="live-sim",
+                        why="sin ANTHROPIC_API_KEY",
+                        accepted=False,
+                        extra={"moment": moment},
+                    )
+                )
+                continue
+            t0 = window_lines[0].start if window_lines else moment - before
             verdict = await judge.judge(
                 {
                     "t0": t0,
@@ -154,16 +173,38 @@ def _live_sim_candidates(config, api_key: str | None, lines: list[Line], duratio
                         {"start": round(line.start - t0, 2), "end": round(line.end - t0, 2), "text": line.text}
                         for line in window_lines
                     ],
+                    "people": people,
                     "cues": ["live-sim"],
-                    "context": "Sin ficha en este paquete si no se cargó la base.",
+                    "context": "Participantes cargados de la base." if people else "Sin ficha.",
                 }
             )
-            judge_start = start if verdict.setup_start is None else t0 + verdict.setup_start
-            judge_end = end if verdict.end is None else t0 + verdict.end
+            if verdict.mode != "editorial" or verdict.setup_start is None or verdict.end is None:
+                found.append(
+                    Pick(
+                        start=moment,
+                        end=moment + 1,
+                        score=verdict.total,
+                        trigger="live-sim",
+                        why=verdict.why or verdict.mode,
+                        accepted=False,
+                        extra={"moment": moment},
+                    )
+                )
+                continue
+            cut_start, cut_end, _payoff = clip_bounds(
+                window_lines,
+                t0 + verdict.setup_start,
+                t0 + (verdict.payoff if verdict.payoff is not None else verdict.setup_start),
+                t0 + verdict.end,
+                min_seconds=config.clip_min_seconds,
+                max_seconds=config.editorial_max_seconds,
+                payoff_quote=verdict.payoff_quote,
+                reaction_cap=config.editorial_reaction_cap,
+            )
             found.append(
                 Pick(
-                    start=judge_start,
-                    end=judge_end,
+                    start=cut_start,
+                    end=cut_end,
                     score=verdict.total,
                     trigger="live-sim",
                     category=verdict.category,
@@ -172,13 +213,50 @@ def _live_sim_candidates(config, api_key: str | None, lines: list[Line], duratio
                     why=verdict.why,
                     participants=", ".join(verdict.participants),
                     accepted=bool(verdict.keep),
+                    extra={"moment": moment},
                 )
             )
         return found
 
     import asyncio
 
-    return asyncio.run(_run())
+    drafts = asyncio.run(_judge_all()) if windows else []
+    merged: list[Pick] = []
+    for pick in drafts:
+        previous = next((item for item in merged if ranges_overlap(pick.start, pick.end, item.start, item.end)), None)
+        if previous is None:
+            merged.append(pick)
+            continue
+        combined = merge_overlapping(previous, pick)
+        merged[merged.index(previous)] = combined
+    if video is not None and video.exists():
+        _cut_live_sim(config, video, merged)
+    return merged
+
+
+def _cut_live_sim(config, video: Path, picks: list[Pick]) -> None:
+    import asyncio
+
+    from cliphunter.editorial.cut import precise_ffmpeg_command
+    from cliphunter.procutil import run_process
+
+    folder = config.resolved_clips_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+
+    async def _go() -> None:
+        index = 0
+        for pick in picks:
+            if not pick.accepted:
+                continue
+            index += 1
+            target = folder / f"compare_live_{index:02d}.mp4"
+            code, _error = await run_process(
+                precise_ffmpeg_command(video, target, start=max(0.0, pick.start), duration=max(0.2, pick.end - pick.start))
+            )
+            if code == 0 and target.exists():
+                pick.why = ((pick.why or "") + f" corte {target.name}").strip()
+
+    asyncio.run(_go())
 
 
 def _load_people(config) -> list[dict]:

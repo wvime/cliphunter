@@ -115,15 +115,35 @@ def transcribe_samples(
     model = load_model(model_name)
     if model is None or not samples:
         return []
-    from cliphunter.editorial.names import correct_tokens
-
     audio = as_numpy(samples)
-    prompt = None
-    hotwords = None
-    if names:
-        prompt = "Nombres: " + ", ".join(names[:40])
-        hotwords = " ".join(names[:30])
-    kwargs = {
+    kwargs = transcribe_kwargs(names, language)
+    hotwords = kwargs.pop("hotwords")
+    try:
+        segments, _info = model.transcribe(audio, hotwords=hotwords, **kwargs)
+    except TypeError:
+        segments, _info = model.transcribe(audio, **kwargs)
+    lines: list[tuple[float, float, str, tuple]] = []
+    for segment in segments:
+        # The transcript text stays as Whisper wrote it. Names are not substituted.
+        text = (segment.text or "").strip()
+        if not text:
+            continue
+        words = []
+        for word in getattr(segment, "words", None) or []:
+            token = (getattr(word, "word", "") or "").strip()
+            if token:
+                words.append((float(word.start), float(word.end), token))
+        lines.append((float(segment.start), float(segment.end), text, tuple(words)))
+    return lines
+
+
+def transcribe_kwargs(names: list[str] | None, language: str = "es") -> dict:
+    """Arguments that must reach faster-whisper. Names are hints, not replacements."""
+
+    cleaned = [name.strip() for name in (names or []) if name and name.strip()]
+    prompt = "Nombres: " + ", ".join(cleaned[:40]) if cleaned else None
+    hotwords = " ".join(cleaned[:30]) if cleaned else None
+    return {
         "language": language or None,
         "vad_filter": True,
         "beam_size": 1,
@@ -131,20 +151,5 @@ def transcribe_samples(
         "condition_on_previous_text": False,
         "word_timestamps": True,
         "initial_prompt": prompt,
+        "hotwords": hotwords,
     }
-    try:
-        segments, _info = model.transcribe(audio, hotwords=hotwords, **kwargs)
-    except TypeError:
-        segments, _info = model.transcribe(audio, **kwargs)
-    lines: list[tuple[float, float, str, tuple]] = []
-    for segment in segments:
-        text = correct_tokens((segment.text or "").strip(), names or [])
-        if not text:
-            continue
-        words = []
-        for word in getattr(segment, "words", None) or []:
-            token = correct_tokens((getattr(word, "word", "") or "").strip(), names or [])
-            if token:
-                words.append((float(word.start), float(word.end), token))
-        lines.append((float(segment.start), float(segment.end), text, tuple(words)))
-    return lines

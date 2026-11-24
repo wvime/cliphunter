@@ -13,7 +13,7 @@ from cliphunter.editorial import PROMPT_VERSION
 from cliphunter.editorial.names import ground_verdict
 from cliphunter.editorial.score import component_dict, normalize_category, rescale, should_keep, tier_for
 
-PROMPT_PATH = Path(__file__).with_name("prompts") / "director_v2.md"
+PROMPT_PATH = Path(__file__).with_name("prompts") / "director_v3.md"
 
 
 class EditorialVerdict(BaseModel):
@@ -121,6 +121,13 @@ def _float(value: object) -> float | None:
         return None
 
 
+def _payload_usable(payload: dict[str, Any]) -> bool:
+    components = payload.get("components")
+    if not isinstance(components, dict) or not components:
+        return False
+    return any(value not in (None, "") for value in components.values())
+
+
 def _packet_transcript(packet: dict[str, Any]) -> str:
     lines = packet.get("transcript") or []
     parts = []
@@ -188,6 +195,7 @@ class ClaudeJudge:
         resample: bool = True,
         resample_low: float = 58,
         resample_high: float = 72,
+        backoff: float = 0.4,
     ) -> None:
         self.api_key = api_key
         self.model = model
@@ -196,26 +204,47 @@ class ClaudeJudge:
         self.resample = resample
         self.resample_low = resample_low
         self.resample_high = resample_high
+        self.backoff = backoff
         self._complete = complete
 
     async def judge(self, packet: dict[str, Any]) -> EditorialVerdict:
         if not self.api_key and self._complete is None:
             return signal_only_verdict(packet.get("signal_score"))
-        try:
-            first = self._finish(extract_json(await self._ask(packet)), packet)
-            if (
-                not self.resample
-                or first.mode != "editorial"
-                or first.total is None
-                or not (self.resample_low <= first.total <= self.resample_high)
-            ):
-                return first
-            second = self._finish(extract_json(await self._ask(packet)), packet)
-            if second.mode != "editorial":
-                return first
-            return _average(first, second, packet, minimum=self.minimum, floor=self.floor)
-        except Exception:
-            return signal_only_verdict(packet.get("signal_score"))
+        last_error = "respuesta vacía"
+        for attempt in range(3):
+            try:
+                raw = await self._ask(packet)
+                if not str(raw or "").strip():
+                    raise ValueError("respuesta vacía")
+                payload = extract_json(raw)
+                if not _payload_usable(payload):
+                    raise ValueError("respuesta sin componentes")
+                first = self._finish(payload, packet)
+                if (
+                    not self.resample
+                    or first.total is None
+                    or not (self.resample_low <= first.total <= self.resample_high)
+                ):
+                    return first
+                second_raw = await self._ask(packet)
+                second = self._finish(extract_json(second_raw), packet) if _payload_usable(extract_json(second_raw)) else first
+                if second.mode != "editorial":
+                    return first
+                return _average(first, second, packet, minimum=self.minimum, floor=self.floor)
+            except Exception as exc:
+                last_error = str(exc)
+                from cliphunter.jsonlog import log_event
+
+                log_event("WARNING", "editorial.judge_retry", attempt=attempt + 1, error=last_error)
+                if attempt < 2 and self.backoff:
+                    import asyncio
+
+                    await asyncio.sleep(self.backoff * (attempt + 1))
+        from cliphunter.jsonlog import log_event
+
+        log_event("ERROR", "editorial.judge_error", error=last_error)
+        failed = signal_only_verdict(packet.get("signal_score"))
+        return failed.model_copy(update={"mode": "judge_error", "why": "judge_error", "total": None})
 
     def _finish(self, payload: dict[str, Any], packet: dict[str, Any]) -> EditorialVerdict:
         verdict = verdict_from_payload(payload, minimum=self.minimum)

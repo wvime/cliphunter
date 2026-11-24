@@ -64,7 +64,7 @@ def clip_bounds(
         if stop - start > cap:
             start = stop - cap
         return start, stop, payoff
-    ordered = sorted(lines, key=lambda line: line.start)
+    ordered = sorted(explode_lines(lines), key=lambda line: line.start)
     setup_line = _covering(ordered, setup) or ordered[0]
     payoff_line = _quote_line(ordered, payoff_quote) or _covering(ordered, payoff) or setup_line
     end_line = _covering(ordered, end) or payoff_line
@@ -90,6 +90,40 @@ def clip_bounds(
     if stop <= start:
         stop = start + min(min_seconds, cap)
     return start, stop, payoff_line.start
+
+
+def explode_lines(lines: list[Line]) -> list[Line]:
+    """Break a long whisper segment into sentences using words and pauses."""
+
+    pieces: list[Line] = []
+    for line in lines:
+        pieces.extend(split_line(line))
+    return pieces
+
+
+def split_line(line: Line, *, pause: float = 0.45) -> list[Line]:
+    words = [word for word in line.words if word.text.strip()]
+    if len(words) < 2:
+        return [line]
+    groups: list[list[Word]] = [[]]
+    for word in words:
+        if groups[-1]:
+            gap = word.start - groups[-1][-1].end
+            if gap >= pause or _ends_sentence(groups[-1][-1].text):
+                groups.append([])
+        groups[-1].append(word)
+    pieces: list[Line] = []
+    for group in groups:
+        if not group:
+            continue
+        text = " ".join(word.text.strip() for word in group).strip()
+        pieces.append(Line(group[0].start, group[-1].end, text, tuple(group)))
+    return pieces or [line]
+
+
+def _ends_sentence(text: str) -> bool:
+    stripped = text.strip()
+    return bool(stripped) and stripped[-1] in ".?!"
 
 
 def _last_word_end(line: Line) -> float:

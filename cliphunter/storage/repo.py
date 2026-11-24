@@ -487,6 +487,8 @@ class SqliteRepo:
         attribution: dict[str, Any] | None = None,
         file_path: str | None = None,
         duration_seconds: float | None = None,
+        signal_score: float | None = None,
+        breakdown: dict[str, Any] | None = None,
     ) -> None:
         sets: list[str] = []
         params: list[Any] = []
@@ -502,6 +504,12 @@ class SqliteRepo:
         if duration_seconds is not None:
             sets.append("duration_seconds = ?")
             params.append(duration_seconds)
+        if signal_score is not None:
+            sets.append("signal_score = ?")
+            params.append(signal_score)
+        if breakdown is not None:
+            sets.append("breakdown_json = ?")
+            params.append(_dumps(breakdown))
         if not sets:
             return
         params.append(clip_id)
