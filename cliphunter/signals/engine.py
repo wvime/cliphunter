@@ -331,6 +331,20 @@ class AutoClipEngine:
         if not selected:
             log_event("WARNING", "auto.no_segments", channel=state.view.channel_key)
             return
+        from cliphunter.editorial.dedupe import overlaps_saved
+        from cliphunter.timeutil import parse_iso
+
+        try:
+            if await overlaps_saved(
+                self.repo,
+                state.view.channel_db_id,
+                parse_iso(selected[0].wall_start).timestamp(),
+                parse_iso(selected[-1].wall_end).timestamp(),
+            ):
+                log_event("INFO", "clip.duplicate", channel=state.view.channel_key)
+                return
+        except (ValueError, TypeError):
+            pass
         breakdown = {
             "score": round(tick.score, 3),
             "signals": tick.parts,
@@ -355,6 +369,7 @@ class AutoClipEngine:
                 kind="auto",
                 signal_score=tick.score,
                 selected=selected,
+                event_mode=self.config.event_mode,
             )
         except Exception as exc:
             log_event("ERROR", "auto.cut_failed", channel=state.view.channel_key, error=str(exc))

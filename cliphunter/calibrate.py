@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 from cliphunter.config import AppConfig, channel_key, load_config
-from cliphunter.editorial.feedback import summarize_feedback
+from cliphunter.editorial.feedback import suggest_editorial_threshold, summarize_feedback
 from cliphunter.signals.aggregate import canonical_weights, channel_threshold
 from cliphunter.signals.nudge import calibration_path, load_nudges
 from cliphunter.storage.repo import SqliteRepo
@@ -106,7 +106,12 @@ def calibrate_command(config_path: Path, *, apply: bool = False, canal: str | No
         wanted = {canal, canal.lstrip("@")}
         grouped = {key: rows for key, rows in grouped.items() if key in wanted or key.endswith("_" + canal)}
     learned = summarize_feedback(decisions, published, minimum=config.editorial_min_score)
-    print(f"editorial: mínimo {config.editorial_min_score:g} -> {learned['minimum']:g}")
+    from_scores = suggest_editorial_threshold(decisions, config.editorial_min_score)
+    suggested_min = from_scores if from_scores is not None else learned["minimum"]
+    print(f"editorial: mínimo {config.editorial_min_score:g} -> {suggested_min:g}")
+    if from_scores is not None:
+        print("editorial: el mínimo sale del punto medio entre aprobados y rechazados")
+    learned["minimum"] = suggested_min
     if learned["reasons"]:
         rendered = ", ".join(f"{name} {count}" for name, count in learned["reasons"].items())
         print(f"editorial: razones de rechazo: {rendered}")

@@ -13,7 +13,7 @@ max_concurrent_streams: 2
 buffer_dir: "C:\\cliphunter\\buffer"
 buffer_minutes: 10
 segment_seconds: 4
-quality: "480p,720p"
+quality: "720p,best,480p"
 poll_interval_seconds: 45
 # Detección automática (modo principal). El atajo de abajo es solo un extra.
 auto_clip: true

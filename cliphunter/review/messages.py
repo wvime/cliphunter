@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 BUTTONS = (
@@ -71,36 +70,28 @@ def parse_callback(data: str) -> tuple[str, int] | None:
 
 
 def build_caption(item: dict[str, Any]) -> str:
-    lines = [
-        f"Canal: {item.get('channel') or 'desconocido'}",
-        f"Inicio: {item.get('clip_start') or '-'}",
-        f"Fin: {item.get('clip_end') or '-'}",
-    ]
-    if item.get("title"):
-        lines.append(f"Título: {item['title']}")
+    """Title first. One compact second line. No transcript, hook, or why."""
+
+    title = str(item.get("title") or "").strip() or str(item.get("channel") or "Clip")
+    bits: list[str] = []
+    score = item.get("viral_score")
+    if score is None:
+        score = item.get("signal_score")
+    if score is not None:
+        bits.append(str(score))
     if item.get("category"):
-        lines.append(f"Categoría: {item['category']}")
+        bits.append(str(item["category"]))
     participants = item.get("participants") or []
     if isinstance(participants, list) and participants:
-        lines.append("Participantes: " + ", ".join(str(name) for name in participants))
-    if item.get("why"):
-        lines.append(f"Por qué: {item['why']}")
-    if item.get("hook"):
-        lines.append(f"Hook: {item['hook']}")
-    viral = item.get("viral_score")
-    if viral is not None:
-        tier = item.get("tier") or ""
-        lines.append(f"Viral: {viral}" + (f" ({tier})" if tier else ""))
-    elif item.get("signal_score") is not None:
-        lines.append(f"Score: {item.get('signal_score')}")
-    if item.get("editorial_mode") == "signal-only":
-        lines.append("Modo: solo señales")
-    breakdown = item.get("breakdown")
-    if breakdown:
-        encoded = json.dumps(breakdown, ensure_ascii=False)
-        lines.append(f"Breakdown: {encoded}")
-    text = "\n".join(lines)
-    return text[:1024]
+        bits.append(", ".join(str(name) for name in participants))
+    second = " · ".join(bits)
+    label = str(item.get("adjust_label") or "").strip()
+    if label:
+        second = f"{second} {label}".strip()
+    lines = [title]
+    if second:
+        lines.append(second)
+    return "\n".join(lines)[:1024]
 
 
 def ready_sidecar_text(attribution: dict[str, Any]) -> str:

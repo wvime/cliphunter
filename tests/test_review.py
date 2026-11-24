@@ -98,10 +98,22 @@ def test_caption_keyboard_and_sidecar():
             "breakdown": {"chat": 0.4},
         }
     )
-    assert "Canal: alofoke" in caption
-    assert "Inicio: 2026-11-18T00:00:00+00:00" in caption
-    assert "Score: 2.5" in caption
-    assert "chat" in caption
+    assert caption.splitlines()[0] == "alofoke"
+    assert caption.splitlines()[1] == "2.5"
+    assert "chat" not in caption
+    assert "Por qué" not in caption
+    titled = build_caption(
+        {
+            "title": "Tokischa no aguantó",
+            "viral_score": 82,
+            "category": "humor",
+            "participants": ["Tokischa"],
+            "why": "un párrafo largo que no debe salir",
+            "hook": "tampoco esto",
+            "adjust_label": "(ajustado, 5s)",
+        }
+    )
+    assert titled.splitlines() == ["Tokischa no aguantó", "82 · humor · Tokischa (ajustado, 5s)"]
     labels = [button["text"] for row in review_keyboard(4)["inline_keyboard"] for button in row]
     assert labels == [
         "Aprobar",
@@ -176,7 +188,8 @@ async def test_send_preview_and_ignore_other_chats(tmp_path: Path):
         )
         await runtime.scan_once()
         send = next(call for call in api.history if call["method"] == "sendVideo")
-        assert "Canal: alofoke" in send["data"]["caption"]
+        assert "alofoke" in send["data"]["caption"]
+        assert "2.5" in send["data"]["caption"]
         assert "Aprobar" in send["data"]["reply_markup"]
         assert send["data"]["chat_id"] == "7"
         assert send["files"]["video"].name == "show.mp4"

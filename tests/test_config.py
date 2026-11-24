@@ -138,7 +138,7 @@ def test_alofoke_example_authorization_reaches_clip_attribution(tmp_path: Path):
     assert config.max_concurrent_streams == 2
     assert config.buffer_minutes == 10
     assert config.segment_seconds == 4
-    assert config.quality == ["480p", "720p"]
+    assert config.quality == ["720p", "best", "480p"]
     assert config.poll_interval_seconds == 45
     assert len(config.channels) == 1
     channel = find_channel(config, "alofoke")

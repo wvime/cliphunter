@@ -7,7 +7,15 @@ from pathlib import Path
 
 from cliphunter.config import load_config
 from cliphunter.editorial.bounds import Line
-from cliphunter.editorial.compare import Pick, old_picks_from_moments, render_report
+from cliphunter.editorial.compare import (
+    Pick,
+    energy_picks,
+    live_sim_windows,
+    old_picks_from_moments,
+    picks_from_directory,
+    render_report,
+    render_table,
+)
 from cliphunter.editorial.cues import find_cues
 from cliphunter.env import load_env
 from cliphunter.replay import load_chat, replay_moments
@@ -23,21 +31,34 @@ def compare_command(args) -> int:
     messages = load_chat(Path(args.chat)) if getattr(args, "chat", None) else []
     duration = _duration(Path(video), messages)
     channel = config.channels[0] if config.channels else None
-    moments = replay_moments(
-        messages,
-        duration=duration,
-        weights=channel.weights if channel else None,
-        emotes=list(channel.emotes_hype) if channel else None,
-        threshold=channel_threshold(channel.thresholds if channel else None),
-        hysteresis=config.hysteresis,
-        window=config.signal_window_seconds,
-        step=config.signal_interval_seconds,
-        min_seconds=config.clip_min_seconds,
-        max_seconds=config.clip_max_seconds,
-        target_seconds=config.clip_target_seconds,
-        pre_roll=config.clip_pre_roll_seconds,
-    ) if messages else []
-    old = old_picks_from_moments(moments)
+    old_dir = getattr(args, "old_clips", None)
+    if old_dir:
+        from cliphunter.clip import probe_duration
+
+        old = picks_from_directory(Path(old_dir), probe=probe_duration)
+        moments = []
+    else:
+        moments = (
+            replay_moments(
+                messages,
+                duration=duration,
+                weights=channel.weights if channel else None,
+                emotes=list(channel.emotes_hype) if channel else None,
+                threshold=channel_threshold(channel.thresholds if channel else None),
+                hysteresis=config.hysteresis,
+                window=config.signal_window_seconds,
+                step=config.signal_interval_seconds,
+                min_seconds=config.clip_min_seconds,
+                max_seconds=config.clip_max_seconds,
+                target_seconds=config.clip_target_seconds,
+                pre_roll=config.clip_pre_roll_seconds,
+            )
+            if messages
+            else []
+        )
+        old = old_picks_from_moments(moments)
+        if not old:
+            old = _audio_old_picks(Path(video))
     lines = [Line(message.t, message.t + 1.5, message.text) for message in messages]
     spoken = _spoken_lines(Path(video), model=config.whisper_model)
     if spoken:
@@ -54,7 +75,19 @@ def compare_command(args) -> int:
         )
         if not spoken:
             note += " No hay transcripción de audio en este reporte (falta faster-whisper o el archivo no se pudo leer)."
-    report = note + "\n\n" + render_report(old, accepted, rejected=rejected)
+    judged = list(accepted) + list(rejected)
+    if getattr(args, "live_sim", False):
+        judged = _live_sim_candidates(config, env.anthropic_api_key, lines, duration) or judged
+    people = _load_people(config)
+    if people:
+        note += "\n\nFicha: " + ", ".join(person["name"] for person in people)
+    report = (
+        note
+        + "\n\n## Candidatos juzgados\n\n"
+        + render_table(judged)
+        + "\n\n"
+        + render_report(old, [item for item in judged if item.accepted], rejected=[item for item in judged if not item.accepted])
+    )
     out = getattr(args, "out", None)
     if out:
         Path(out).write_text(report, encoding="utf-8")
@@ -62,6 +95,110 @@ def compare_command(args) -> int:
     else:
         print(report)
     return 0
+
+
+def _audio_old_picks(video: Path) -> list[Pick]:
+    from cliphunter.editorial.audio import read_pcm, s16le_to_floats
+
+    if not video.exists():
+        return []
+    import asyncio
+
+    async def _go() -> list[float]:
+        pcm = await read_pcm(video, duration=480)
+        return s16le_to_floats(pcm)
+
+    try:
+        samples = asyncio.run(_go())
+    except Exception:
+        return []
+    return energy_picks(samples)
+
+
+def _live_sim_candidates(config, api_key: str | None, lines: list[Line], duration: float) -> list[Pick]:
+    windows = live_sim_windows(
+        duration,
+        sweep=config.editorial_sweep_seconds,
+        before=config.editorial_before_seconds,
+        after=config.editorial_after_seconds,
+        cooldown=45,
+    )
+    picks: list[Pick] = []
+    if not api_key:
+        for start, end, _mark in windows:
+            window_lines = [line for line in lines if line.end >= start and line.start <= end]
+            cues = find_cues(window_lines, [])
+            picks.append(
+                Pick(
+                    start=start,
+                    end=end,
+                    trigger="live-sim",
+                    why="sin ANTHROPIC_API_KEY" if not cues else "pista " + ",".join(cues) + "; sin clave",
+                    accepted=False,
+                )
+            )
+        return picks
+    from cliphunter.editorial.judge import ClaudeJudge
+
+    judge = ClaudeJudge(api_key, model=config.editorial_model, minimum=config.editorial_min_score, resample=False)
+
+    async def _run() -> list[Pick]:
+        found: list[Pick] = []
+        for start, end, _mark in windows[:8]:
+            window_lines = [line for line in lines if line.end >= start and line.start <= end]
+            t0 = window_lines[0].start if window_lines else start
+            verdict = await judge.judge(
+                {
+                    "t0": t0,
+                    "transcript": [
+                        {"start": round(line.start - t0, 2), "end": round(line.end - t0, 2), "text": line.text}
+                        for line in window_lines
+                    ],
+                    "cues": ["live-sim"],
+                    "context": "Sin ficha en este paquete si no se cargó la base.",
+                }
+            )
+            judge_start = start if verdict.setup_start is None else t0 + verdict.setup_start
+            judge_end = end if verdict.end is None else t0 + verdict.end
+            found.append(
+                Pick(
+                    start=judge_start,
+                    end=judge_end,
+                    score=verdict.total,
+                    trigger="live-sim",
+                    category=verdict.category,
+                    title=verdict.title,
+                    tier=verdict.tier,
+                    why=verdict.why,
+                    participants=", ".join(verdict.participants),
+                    accepted=bool(verdict.keep),
+                )
+            )
+        return found
+
+    import asyncio
+
+    return asyncio.run(_run())
+
+
+def _load_people(config) -> list[dict]:
+    import asyncio
+
+    from cliphunter.storage.repo import SqliteRepo
+
+    repo = SqliteRepo(config.resolved_database_path())
+
+    async def _go() -> list[dict]:
+        await repo.init()
+        try:
+            return await repo.list_participants()
+        finally:
+            await repo.close()
+
+    try:
+        return asyncio.run(_go())
+    except Exception:
+        return []
 
 
 def _without_judge(lines: list[Line], old: list[Pick]) -> tuple[list[Pick], list[Pick]]:

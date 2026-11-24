@@ -7,12 +7,14 @@ from pathlib import Path
 
 from cliphunter.editorial.audio import s16le_to_floats
 from cliphunter.editorial.bounds import Line, Word, clip_bounds
-from cliphunter.editorial.compare import Pick, render_report
+from cliphunter.editorial.archive import retain_clip, shifted_bounds
+from cliphunter.editorial.compare import Pick, live_sim_windows, picks_from_directory, render_report, render_table
 from cliphunter.editorial.compare_cmd import _without_judge
 from cliphunter.editorial.cut import dead_air_trim, precise_ffmpeg_command, silence_spans
-from cliphunter.editorial.feedback import summarize_feedback
+from cliphunter.editorial.feedback import suggest_editorial_threshold, summarize_feedback
 from cliphunter.editorial.io import import_participants
-from cliphunter.editorial.judge import ClaudeJudge, extract_json, signal_only_verdict, verdict_from_payload
+from cliphunter.editorial.judge import ClaudeJudge, EditorialVerdict, extract_json, signal_only_verdict, verdict_from_payload
+from cliphunter.editorial.names import ground_verdict
 from cliphunter.editorial.score import rescale, tier_for
 from cliphunter.editorial.vertical import build_ass, title_markup
 from cliphunter.processing.title_overlay import TitleStyle
@@ -356,4 +358,116 @@ async def test_participant_import_keeps_rumors_unverified(tmp_path: Path):
     assert people[0]["nicknames"] == ["Toki"]
     assert people[0]["verified"] == 0
     assert people[0]["source"] == "https://example.com/toki"
+
+
+def test_ungrounded_names_are_removed_from_the_title():
+    verdict = EditorialVerdict(
+        mode="editorial",
+        title="Santiago Matias preguntó",
+        hook="Santiago lo dijo",
+        why="Santiago insistió",
+        sujeto="Santiago Matias",
+        participants=["Santiago Matias"],
+        total=70,
+    )
+    people = [{"name": "Santiago Matias", "nicknames": ["Alofoke"]}]
+    grounded = ground_verdict(verdict, "pa la intimidad, entre bomberos", people)
+    assert grounded.participants == []
+    assert grounded.sujeto is None
+    assert "Santiago" not in (grounded.title or "")
+    assert "un participante" in (grounded.title or "")
+
+
+def test_topic_change_ends_the_clip_and_the_payoff_stays_inside():
+    lines = [
+        Line(0.0, 3.0, "pa la intimidad", (Word(0.4, 1.6, "intimidad"),)),
+        Line(3.2, 5.0, "jajaja", (Word(3.2, 4.4, "jajaja"),)),
+        Line(5.2, 8.0, "bienvenido Frenny"),
+    ]
+    start, end, _payoff = clip_bounds(
+        lines,
+        0.5,
+        1.0,
+        2.0,
+        min_seconds=1,
+        max_seconds=60,
+        payoff_quote="pa la intimidad",
+    )
+    assert abs(start - 0.1) < 0.02
+    assert end >= 1.6
+    assert end < 5.2
+
+
+def test_live_sim_windows_and_old_clip_folder(tmp_path: Path):
+    windows = live_sim_windows(180, sweep=30, before=90, after=30, cooldown=45)
+    assert windows[0] == (0.0, 60.0, 30.0)
+    assert windows[1][2] == 90.0
+    folder = tmp_path / "viejos"
+    folder.mkdir()
+    (folder / "a.mp4").write_bytes(b"a")
+    (folder / "b.mp4").write_bytes(b"b")
+    picks = picks_from_directory(folder, probe=lambda _path: None)
+    assert [(pick.start, pick.end) for pick in picks] == [(0.0, 30.0), (30.0, 60.0)]
+    table = render_table(
+        [Pick(start=12.1, end=36.0, score=61.1, category="humor", participants="Frenny", why="el remate", accepted=True)]
+    )
+    assert "| 12.1 | 36.0 | 61.1 | humor | Frenny | el remate | se queda |" in table
+
+
+def test_calibrate_suggests_the_midpoint_of_approve_and_reject_scores():
+    suggested = suggest_editorial_threshold(
+        [
+            {"action": "reject", "weight": 1, "breakdown_json": json.dumps({"total": 40})},
+            {"action": "approve", "weight": 3, "breakdown_json": json.dumps({"total": 80})},
+        ],
+        65,
+    )
+    assert suggested == 60.0
+
+
+def test_pending_clip_segments_stay_after_the_buffer_drops_them(tmp_path: Path):
+    from datetime import datetime, timedelta, timezone
+
+    from cliphunter.index import Segment, SegmentIndex
+
+    directory = tmp_path / "buffer" / "youtube_test"
+    directory.mkdir(parents=True)
+    origin = datetime(2026, 11, 24, tzinfo=timezone.utc)
+    segments = []
+    for index in range(4):
+        start = origin + timedelta(seconds=index * 4)
+        name = f"s{index}.ts"
+        (directory / name).write_bytes(b"segment")
+        segments.append(
+            Segment(
+                file=name,
+                duration=4,
+                wall_start=start.isoformat(),
+                wall_end=(start + timedelta(seconds=4)).isoformat(),
+            )
+        )
+    index = SegmentIndex(channel_key="youtube_test", platform="youtube", directory=directory, segments=segments)
+    index.save()
+    stored = retain_clip(
+        buffer_dir=tmp_path / "buffer",
+        clip_id=7,
+        index_path=index.path,
+        files=["s1.ts", "s2.ts"],
+        margin_seconds=4,
+    )
+    assert stored is not None
+    for segment in segments:
+        (directory / segment.file).unlink()
+    archived = SegmentIndex.load(stored)
+    names = [segment.file for segment in archived.segments]
+    assert "s1.ts" in names and "s2.ts" in names
+    assert (stored.parent / "s1.ts").exists()
+    start, end = shifted_bounds(segments[1].wall_start, segments[2].wall_end, "fin", 5)
+    assert end > parse_end(segments[2].wall_end)
+
+
+def parse_end(value: str) -> float:
+    from cliphunter.timeutil import parse_iso
+
+    return parse_iso(value).timestamp()
 

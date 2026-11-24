@@ -16,6 +16,7 @@ class Pick:
     tier: str | None = None
     why: str | None = None
     accepted: bool = True
+    participants: str = ""
     extra: dict = field(default_factory=dict)
 
     def overlaps(self, other: Pick) -> bool:
@@ -67,6 +68,113 @@ def render_report(old: list[Pick], new: list[Pick], *, rejected: list[Pick] | No
     lines.extend(missed or ["Ninguno."])
     lines.append("")
     return "\n".join(lines)
+
+
+def render_table(picks: list[Pick]) -> str:
+    """Every judged candidate, including the ones that were dropped."""
+
+    header = "| inicio | fin | score | categoría | participantes | por qué | estado |"
+    rule = "| --- | --- | --- | --- | --- | --- | --- |"
+    rows = [header, rule]
+    if not picks:
+        rows.append("| — | — | — | — | — | ningún candidato | — |")
+        return "\n".join(rows)
+    for pick in picks:
+        state = "se queda" if pick.accepted else "se descarta"
+        score = "" if pick.score is None else f"{pick.score:g}"
+        rows.append(
+            "| {start:.1f} | {end:.1f} | {score} | {category} | {people} | {why} | {state} |".format(
+                start=pick.start,
+                end=pick.end,
+                score=score,
+                category=pick.category or "",
+                people=pick.participants,
+                why=(pick.why or pick.trigger or "").replace("|", "/"),
+                state=state,
+            )
+        )
+    return "\n".join(rows)
+
+
+def live_sim_windows(
+    duration: float,
+    *,
+    sweep: float = 30,
+    before: float = 90,
+    after: float = 30,
+    cooldown: float = 45,
+) -> list[tuple[float, float, float]]:
+    """Windows the live loop would judge: every ``sweep`` s, with a cooldown."""
+
+    t = 0.0
+    next_ok = 0.0
+    windows: list[tuple[float, float, float]] = []
+    while t <= duration + 1e-6:
+        if t >= next_ok and t > 0:
+            windows.append((max(0.0, t - before), min(duration, t + after), t))
+            next_ok = t + cooldown
+        t += sweep
+    return windows
+
+
+def picks_from_directory(path: Path, *, probe) -> list[Pick]:
+    """Treat consecutive files in a folder as the old fixed-length selection."""
+
+    files = sorted(
+        item
+        for item in path.iterdir()
+        if item.is_file() and item.suffix.lower() in {".mp4", ".ts", ".mkv", ".m4v"}
+    )
+    cursor = 0.0
+    picks: list[Pick] = []
+    for item in files:
+        try:
+            duration = float(probe(item) or 0)
+        except (TypeError, ValueError):
+            duration = 0.0
+        if duration <= 0:
+            duration = 30.0
+        picks.append(
+            Pick(
+                start=cursor,
+                end=cursor + duration,
+                trigger=f"clip viejo {item.name}",
+                accepted=True,
+            )
+        )
+        cursor += duration
+    return picks
+
+
+def energy_picks(samples: list[float], *, rate: int = 8000, window: float = 10, step: float = 2, threshold: float = 2.5) -> list[Pick]:
+    """Old selector with only audio energy, for a VOD that has no chat file."""
+
+    from cliphunter.signals.aggregate import MomentTracker
+    from cliphunter.signals.baseline import RollingBaseline
+
+    if rate <= 0 or not samples:
+        return []
+    hop = max(1, int(step * rate))
+    width = max(hop, int(window * rate))
+    baseline = RollingBaseline(horizon=600, min_samples=5)
+    tracker = MomentTracker()
+    found: list[Pick] = []
+    t = 0.0
+    pos = 0
+    while pos + 16 < len(samples):
+        chunk = samples[max(0, pos + hop - width) : pos + hop]
+        if not chunk:
+            break
+        rms = (sum(sample * sample for sample in chunk) / len(chunk)) ** 0.5
+        score = baseline.add(t, rms)
+        phase = tracker.push(t, score, threshold=threshold, release=threshold * 0.65, max_len=45)
+        if phase == "fire" and tracker.samples:
+            start = tracker.samples[0][0]
+            found.append(Pick(start=max(0.0, start - 8), end=t, score=round(score, 3), trigger="audio", accepted=True))
+            tracker.reset()
+        t += step
+        pos += hop
+    return found
 
 
 def _section(picks: list[Pick]) -> list[str]:

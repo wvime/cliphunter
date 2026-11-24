@@ -236,6 +236,7 @@ async def create_clip(
     kind: str = "manual",
     signal_score: float | None = None,
     selected: list[Segment] | None = None,
+    event_mode: str | None = None,
 ) -> ClipResult:
     if not index_path.exists():
         raise ClipError(
@@ -248,6 +249,8 @@ async def create_clip(
         plan = plan_clip(index, seconds)
     plan.attribution["buffer_index"] = str(index_path.resolve())
     plan.attribution["channel_key"] = index.channel_key
+    if event_mode:
+        plan.attribution["event_mode"] = event_mode
     if authorization:
         plan.attribution["authorization"] = authorization
     if credit:
@@ -278,6 +281,7 @@ async def create_clip(
             weight=weight,
             breakdown=breakdown,
             signal_score=signal_score,
+            event_mode=event_mode,
         )
         plan.attribution["clip_id"] = clip_id
         atomic_write_json(sidecar, plan.attribution)

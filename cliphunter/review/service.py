@@ -17,6 +17,7 @@ from cliphunter.config import AppConfig
 from cliphunter.env import EnvSettings
 from cliphunter.index import SegmentIndex
 from cliphunter.jsonlog import log_event
+from cliphunter.editorial.archive import archive_index, drop_archive, retain_clip, shifted_bounds
 from cliphunter.review.adjust import shift_window
 from cliphunter.review.localapp import LocalNotifier
 from cliphunter.review.messages import ADJUST_OPS, ready_sidecar_text
@@ -66,6 +67,7 @@ def clip_row_to_item(row: dict[str, Any]) -> dict[str, Any]:
         "participants": attribution.get("participants") or [],
         "why": attribution.get("why"),
         "editorial_mode": attribution.get("editorial_mode"),
+        "adjust_label": attribution.get("adjust_label"),
         "breakdown": breakdown if isinstance(breakdown, dict) and breakdown else None,
         "credit": attribution.get("credit"),
         "attribution": attribution,
@@ -164,6 +166,7 @@ class ReviewRuntime:
         for row in rows:
             if row.get("status") != "pending" or row.get("review_claimed"):
                 continue
+            _keep_archive(self.config, row)
             item = clip_row_to_item(row)
             if self.local is not None:
                 self.local.announce(item)
@@ -237,6 +240,7 @@ class ReviewRuntime:
         )
         attribution["ready_path"] = str(dest)
         await self.repo.update_clip(clip_id, status="approved", attribution=attribution)
+        drop_archive(self.config.buffer_dir, clip_id)
         log_event("INFO", "review.approved", clip_id=clip_id, ready=str(dest))
         return dest
 
@@ -256,6 +260,7 @@ class ReviewRuntime:
             participants=participants,
         )
         await self.repo.update_clip(clip_id, status="rejected")
+        drop_archive(self.config.buffer_dir, clip_id)
         log_event("INFO", "review.rejected", clip_id=clip_id, reason=reason)
 
     async def _render_vertical(self, source: Path, dest: Path, attribution: dict[str, Any], row: dict[str, Any]) -> bool:
@@ -298,8 +303,13 @@ class ReviewRuntime:
             raise ValueError("el clip no guarda el índice del buffer para reajustar")
         source = Path(row["file_path"])
         output = source.with_name(f"{source.stem}_{edge}_{int(delta):+d}.mp4")
-        recut = await self._recut(Path(index_value), files, edge, delta, output, attribution)
+        buffer_missing = _buffer_missing(Path(index_value), files)
+        if buffer_missing and self._recut is default_recut:
+            recut = await self._adjust_from_archive(clip_id, attribution, edge, delta, output)
+        else:
+            recut = await self._recut(Path(index_value), files, edge, delta, output, attribution)
         new_attribution = dict(recut["attribution"])
+        new_attribution["adjust_label"] = f"(ajustado, {abs(int(delta))}s)"
         new_attribution["credit"] = attribution.get("credit")
         new_attribution["breakdown"] = attribution.get("breakdown")
         await self.repo.insert_decision(
@@ -335,6 +345,19 @@ class ReviewRuntime:
             log_event("WARNING", "review.resend_failed", clip_id=clip_id, error=str(exc))
             await self.repo.release_review(clip_id)
 
+    async def _adjust_from_archive(self, clip_id: int, attribution: dict[str, Any], edge: str, delta: float, output: Path) -> dict[str, Any]:
+        from cliphunter.editorial.cut import cut_precise
+
+        path = archive_index(self.config.buffer_dir, clip_id)
+        if path is None or not attribution.get("clip_start") or not attribution.get("clip_end"):
+            raise ValueError("el buffer ya no tiene esos segmentos y no quedó archivo de revisión")
+        start, end = shifted_bounds(str(attribution["clip_start"]), str(attribution["clip_end"]), edge, delta)
+        _selected, new_attribution, duration = await cut_precise(index_path=path, start=start, end=end, output=output)
+        for key in ("authorization", "credit", "breakdown", "channel_context", "title", "hook", "category", "participants", "why"):
+            if attribution.get(key) not in (None, "") and key not in new_attribution:
+                new_attribution[key] = attribution[key]
+        return {"attribution": new_attribution, "duration": duration, "path": output}
+
     async def _require(self, clip_id: int) -> dict[str, Any]:
         row = await self.repo.get_clip(clip_id)
         if row is None:
@@ -342,6 +365,31 @@ class ReviewRuntime:
         if row.get("status") not in {"pending", "ready"}:
             raise ValueError(f"el clip {clip_id} ya está {row.get('status')}")
         return row
+
+
+def _buffer_missing(index_path: Path, files: list[str]) -> bool:
+    if not index_path.exists():
+        return True
+    folder = index_path.parent
+    return any(not (folder / name).exists() for name in files)
+
+
+def _keep_archive(config: AppConfig, row: dict[str, Any]) -> None:
+    attribution = _loads(row.get("attribution_json"))
+    index = attribution.get("buffer_index")
+    files = list(attribution.get("source_segments") or [])
+    if not index or not files:
+        return
+    try:
+        retain_clip(
+            buffer_dir=config.buffer_dir,
+            clip_id=int(row["id"]),
+            index_path=Path(index),
+            files=files,
+            margin_seconds=float(config.review_archive_margin_seconds),
+        )
+    except Exception as exc:
+        log_event("WARNING", "review.archive_failed", clip_id=row.get("id"), error=str(exc))
 
 
 def build_review_runtime(

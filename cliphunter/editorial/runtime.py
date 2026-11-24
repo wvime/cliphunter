@@ -144,7 +144,9 @@ class EditorialDirector:
             payoff_quote=verdict.payoff_quote,
             reaction_cap=self.config.editorial_reaction_cap,
         )
-        if self._overlaps_range(start, end):
+        from cliphunter.editorial.dedupe import overlaps_saved
+
+        if self._overlaps_range(start, end) or await overlaps_saved(self.repo, state.view.channel_db_id, start, end):
             log_event("INFO", "editorial.duplicate", channel=key, start=start, end=end)
             return
         await self._save(state, start, end, payoff, verdict, pending.get("trigger") or "")
@@ -187,6 +189,7 @@ class EditorialDirector:
                 "payoff": payoff,
                 "trigger": trigger,
                 "prompt_version": verdict.prompt_version,
+            "event_mode": self.config.event_mode,
                 "transcript_lines": [
                     {"start": line.start, "end": line.end, "text": line.text}
                     for line in self.lines.get(state.view.channel_key, [])
@@ -219,6 +222,7 @@ class EditorialDirector:
             breakdown=breakdown,
             title=verdict.title,
             hook=verdict.hook,
+            event_mode=self.config.event_mode,
         )
         attribution["clip_id"] = clip_id
         atomic_write_json(sidecar, attribution)

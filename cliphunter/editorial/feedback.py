@@ -9,6 +9,41 @@ from __future__ import annotations
 from collections import Counter
 
 
+def suggest_editorial_threshold(decisions: list[dict], current: float) -> float | None:
+    """Midpoint of weighted approval and rejection totals, when both exist."""
+
+    approved: list[tuple[float, float]] = []
+    rejected: list[tuple[float, float]] = []
+    for row in decisions:
+        raw = row.get("breakdown_json")
+        if isinstance(raw, str):
+            import json
+
+            try:
+                raw = json.loads(raw)
+            except json.JSONDecodeError:
+                raw = None
+        if not isinstance(raw, dict) or raw.get("total") is None:
+            continue
+        pair = (float(raw["total"]), float(row.get("weight") or 1))
+        if row.get("action") == "approve":
+            approved.append(pair)
+        elif row.get("action") == "reject":
+            rejected.append(pair)
+    if not approved or not rejected:
+        return None
+
+    def _mean(pairs: list[tuple[float, float]]) -> float:
+        weight = sum(item[1] for item in pairs) or 1
+        return sum(value * item_weight for value, item_weight in pairs) / weight
+
+    low = _mean(rejected)
+    high = _mean(approved)
+    if high <= low:
+        return None
+    return round((low + high) / 2, 1)
+
+
 def summarize_feedback(
     decisions: list[dict],
     publish_rows: list[dict],

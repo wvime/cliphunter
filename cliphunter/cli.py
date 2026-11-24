@@ -93,6 +93,8 @@ def build_parser() -> argparse.ArgumentParser:
     compare = sub.add_parser("compare", help="Compara el selector de señales con el editor.")
     compare.add_argument("archivo", nargs="?", default=None)
     compare.add_argument("--chat", default=None)
+    compare.add_argument("--old-clips", default=None, help="Carpeta de clips viejos consecutivos.")
+    compare.add_argument("--live-sim", action="store_true", help="Simula el bucle en vivo: 90 s, espera 30 s, cooldown 45 s.")
     compare.add_argument("--out", default=None)
     compare.add_argument("--config", default="config.yaml")
     return parser
