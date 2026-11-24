@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 from cliphunter.atomic import atomic_write_json
 from cliphunter.bus import MOMENT_CANDIDATE, Event
@@ -38,15 +39,22 @@ class EditorialDirector:
             env.anthropic_api_key,
             model=config.editorial_model,
             minimum=config.editorial_min_score,
+            floor=config.editorial_story_floor,
+            resample=config.editorial_resample,
+            resample_low=config.editorial_resample_low,
+            resample_high=config.editorial_resample_high,
         )
         self.lines: dict[str, list[Line]] = {}
         self.seen_media: dict[str, set[str]] = {}
         self.pending: dict[str, dict] = {}
         self.last_sweep: dict[str, float] = {}
         self._names: list[str] = []
+        self._people_rows: list[dict] = []
+        self._story_titles: list[str] = []
         self._context = ""
         self._feedback = ""
         self._context_at = 0.0
+        self._sent: list[tuple[float, float]] = []
 
     async def poll(self, state, now: float) -> None:
         await self._transcribe_new(state)
@@ -99,6 +107,8 @@ class EditorialDirector:
             "context": await self._context_text(now),
             "feedback": self._feedback,
         }
+        packet["people"] = await self._people(now)
+        packet["storylines"] = await self._storyline_titles(now)
         verdict = await self.judge.judge(packet)
         if verdict.mode != "editorial":
             state.editorial_mode = "signal-only"
@@ -131,9 +141,23 @@ class EditorialDirector:
             max_seconds=self.config.editorial_max_seconds,
             story_max_seconds=self.config.editorial_story_max_seconds,
             storyline=verdict.storyline,
+            payoff_quote=verdict.payoff_quote,
+            reaction_cap=self.config.editorial_reaction_cap,
         )
+        if self._overlaps_range(start, end):
+            log_event("INFO", "editorial.duplicate", channel=key, start=start, end=end)
+            return
         await self._save(state, start, end, payoff, verdict, pending.get("trigger") or "")
+        self._sent.append((start, end))
         state.cooldown_until = now + channel_cooldown(state.view.thresholds)
+
+    def _overlaps_range(self, start: float, end: float) -> bool:
+        for left, right in self._sent:
+            overlap = min(end, right) - max(start, left)
+            shorter = min(end - start, right - left)
+            if shorter > 0 and overlap / shorter >= 0.3:
+                return True
+        return False
 
     async def _save(self, state, start: float, end: float, payoff: float, verdict, trigger: str) -> None:
         output = self.config.resolved_clips_dir() / f"{state.view.channel_key}_edit_{int(start)}.mp4"
@@ -238,14 +262,20 @@ class EditorialDirector:
                 samples,
                 model_name=self.config.whisper_model,
                 language="es",
+                names=await self._known_names(time.time()),
             )
         except Exception as exc:
             log_event("WARNING", "editorial.transcript_failed", channel=state.view.channel_key, error=str(exc))
             return
         wall = parse_iso(latest.wall_start).timestamp()
         bucket = self.lines.setdefault(state.view.channel_key, [])
-        for start, end, text in pieces:
-            bucket.append(Line(wall + start, wall + end, text))
+        from cliphunter.editorial.bounds import Word
+
+        for piece in pieces:
+            start, end, text = piece[0], piece[1], piece[2]
+            raw_words = piece[3] if len(piece) > 3 else ()
+            words = tuple(Word(wall + item[0], wall + item[1], item[2]) for item in raw_words)
+            bucket.append(Line(wall + start, wall + end, text, words))
         cutoff = wall - self.config.baseline_minutes * 60
         self.lines[state.view.channel_key] = [line for line in bucket if line.end >= cutoff]
 
@@ -298,6 +328,22 @@ class EditorialDirector:
         summary = summarize_feedback(decisions, publish, minimum=self.config.editorial_min_score)
         self._feedback = feedback_block(summary)
         self._names = names
+        self._people_rows = [
+            {"name": person["name"], "nicknames": list(person.get("nicknames") or [])}
+            for person in people
+        ]
+        titles = [str(story.get("title") or "") for story in stories if story.get("title")]
+        for link in links:
+            titles.append(f"{link.get('left_name')} {link.get('kind')} {link.get('right_name')}")
+        self._story_titles = [title for title in titles if title.strip()]
         self._context = "\n".join(rows) or "Sin ficha de participantes. No inventes relaciones."
         self._context_at = now
         return self._context
+
+    async def _people(self, now: float) -> list[dict]:
+        await self._context_text(now)
+        return list(self._people_rows)
+
+    async def _storyline_titles(self, now: float) -> list[str]:
+        await self._context_text(now)
+        return list(self._story_titles)

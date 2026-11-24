@@ -98,24 +98,53 @@ def load_model(model_name: str):
     return _model
 
 
-def transcribe_samples(samples: list[float], *, model_name: str, language: str = "es") -> list[tuple[float, float, str]]:
-    """Return ``(start, end, text)`` in seconds relative to this PCM."""
+def transcribe_samples(
+    samples: list[float],
+    *,
+    model_name: str,
+    language: str = "es",
+    names: list[str] | None = None,
+) -> list[tuple[float, float, str, tuple]]:
+    """Return ``(start, end, text, words)`` in seconds relative to this PCM.
+
+    ``names`` is the participant list. It is passed as ``initial_prompt`` and,
+    when this faster-whisper build accepts it, as ``hotwords``. ``small`` is
+    about three times the CPU of ``base``.
+    """
 
     model = load_model(model_name)
     if model is None or not samples:
         return []
+    from cliphunter.editorial.names import correct_tokens
+
     audio = as_numpy(samples)
-    segments, _info = model.transcribe(
-        audio,
-        language=language or None,
-        vad_filter=True,
-        beam_size=1,
-        best_of=1,
-        condition_on_previous_text=False,
-    )
-    lines: list[tuple[float, float, str]] = []
+    prompt = None
+    hotwords = None
+    if names:
+        prompt = "Nombres: " + ", ".join(names[:40])
+        hotwords = " ".join(names[:30])
+    kwargs = {
+        "language": language or None,
+        "vad_filter": True,
+        "beam_size": 1,
+        "best_of": 1,
+        "condition_on_previous_text": False,
+        "word_timestamps": True,
+        "initial_prompt": prompt,
+    }
+    try:
+        segments, _info = model.transcribe(audio, hotwords=hotwords, **kwargs)
+    except TypeError:
+        segments, _info = model.transcribe(audio, **kwargs)
+    lines: list[tuple[float, float, str, tuple]] = []
     for segment in segments:
-        text = (segment.text or "").strip()
-        if text:
-            lines.append((float(segment.start), float(segment.end), text))
+        text = correct_tokens((segment.text or "").strip(), names or [])
+        if not text:
+            continue
+        words = []
+        for word in getattr(segment, "words", None) or []:
+            token = correct_tokens((getattr(word, "word", "") or "").strip(), names or [])
+            if token:
+                words.append((float(word.start), float(word.end), token))
+        lines.append((float(segment.start), float(segment.end), text, tuple(words)))
     return lines

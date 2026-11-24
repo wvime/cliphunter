@@ -6,10 +6,10 @@ import json
 from pathlib import Path
 
 from cliphunter.editorial.audio import s16le_to_floats
-from cliphunter.editorial.bounds import Line, clip_bounds
+from cliphunter.editorial.bounds import Line, Word, clip_bounds
 from cliphunter.editorial.compare import Pick, render_report
 from cliphunter.editorial.compare_cmd import _without_judge
-from cliphunter.editorial.cut import precise_ffmpeg_command
+from cliphunter.editorial.cut import dead_air_trim, precise_ffmpeg_command, silence_spans
 from cliphunter.editorial.feedback import summarize_feedback
 from cliphunter.editorial.io import import_participants
 from cliphunter.editorial.judge import ClaudeJudge, extract_json, signal_only_verdict, verdict_from_payload
@@ -102,7 +102,14 @@ def test_judge_json_is_rescaled_and_a_storyline_under_65_needs_a_name():
     named = quiet.model_copy(update={"storyline": True, "storyline_note": "la rivalidad con Ana"})
     from cliphunter.editorial.score import should_keep
 
-    assert should_keep(named.total, storyline=True, storyline_note=named.storyline_note)
+    assert should_keep(
+        55,
+        storyline=True,
+        storyline_note="la rivalidad con Ana",
+        known_storylines=["la rivalidad con Ana"],
+    )
+    assert should_keep(27, storyline=True, storyline_note="la rivalidad con Ana", known_storylines=["la rivalidad con Ana"]) is False
+    assert should_keep(55, storyline=True, storyline_note="la rivalidad con Ana") is False
 
 
 async def test_claude_judge_uses_the_injected_completion_and_falls_back():
@@ -131,7 +138,9 @@ async def test_claude_judge_uses_the_injected_completion_and_falls_back():
             }
         )
 
-    verdict = await ClaudeJudge(None, complete=_complete).judge({"transcript": []})
+    verdict = await ClaudeJudge(None, complete=_complete).judge(
+        {"transcript": [{"text": "Ana soltó el chisme en voz baja"}]}
+    )
     assert verdict.keep is True
     assert verdict.title == "Ana soltó el chisme"
     fallback = await ClaudeJudge(None).judge({"signal_score": 3})
@@ -146,14 +155,107 @@ def test_bounds_start_on_the_setup_sentence_and_keep_the_reaction():
         Line(14, 18, "y la cara de ella"),
     ]
     start, end, payoff = clip_bounds(lines, 12.2, 13, 16, min_seconds=15, max_seconds=60)
-    assert start == 12
+    assert start == 11.7
     assert end >= 18
-    assert end - start >= 15
-    assert payoff == 13
+    assert payoff == 12
     long_lines = [Line(float(i), float(i) + 1, "palabra") for i in range(0, 90)]
     start, end, _payoff = clip_bounds(long_lines, 10, 20, 80, min_seconds=15, max_seconds=60)
     assert end - start <= 60
-    assert start == 10
+    assert end >= 80
+
+
+def test_clip_starts_at_the_first_word_not_the_pause_before_it():
+    # The whisper segment opens at 10.0, but nobody speaks until 12.4.
+    setup = Line(
+        10.0,
+        15.0,
+        "pa la intimidad",
+        (
+            Word(12.4, 12.7, "pa"),
+            Word(12.8, 13.0, "la"),
+            Word(13.1, 13.8, "intimidad"),
+        ),
+    )
+    reaction = Line(15.2, 17.0, "jajaja", (Word(15.2, 16.4, "jajaja"),))
+    start, end, _payoff = clip_bounds(
+        [setup, reaction],
+        12.5,
+        13.2,
+        16.0,
+        min_seconds=1,
+        max_seconds=60,
+        payoff_quote="intimidad",
+    )
+    assert start == 12.1
+    assert start > 10.5
+    assert end >= 16.4
+    assert end - start < 20
+
+
+def test_ffmpeg_trims_leading_and_trailing_silence(tmp_path: Path):
+    import asyncio
+    import subprocess
+
+    from cliphunter.clip import probe_duration
+    from cliphunter.editorial.cut import _trim_dead_air
+    from tests.support import require_ffmpeg
+
+    require_ffmpeg()
+    source = tmp_path / "padded.mp4"
+    built = subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=channel_layout=mono:sample_rate=8000:d=2.5",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=8000:d=1",
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=channel_layout=mono:sample_rate=8000:d=2",
+            "-filter_complex",
+            "[0:a][1:a][2:a]concat=n=3:v=0:a=1",
+            "-c:a",
+            "aac",
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert built.returncode == 0, built.stderr[-500:]
+    before = probe_duration(source)
+    assert before is not None and before > 4.5
+    asyncio.run(_trim_dead_air(source))
+    after = probe_duration(source)
+    assert after is not None
+    assert after < before - 1.5
+    assert 1.2 < after < 3.2
+
+
+def test_dead_air_plan_keeps_a_third_before_speech_and_drops_a_long_tail():
+    log = "\n".join(
+        [
+            "silence_start: 0",
+            "silence_end: 2.8 | silence_duration: 2.8",
+            "silence_start: 8.2",
+            "silence_end: 11.0 | silence_duration: 2.8",
+        ]
+    )
+    spans = silence_spans(log)
+    assert spans == [(0.0, 2.8), (8.2, 11.0)]
+    window = dead_air_trim(11.0, spans)
+    assert window is not None
+    start, end = window
+    assert start == 2.5
+    assert abs(end - 8.8) < 0.01
 
 
 def test_compare_report_shows_rejects_and_misses():

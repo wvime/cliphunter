@@ -22,6 +22,7 @@ _COLUMN_PATCHES = {
     ("decisions", "reason"): "TEXT",
     ("decisions", "category"): "TEXT",
     ("decisions", "participants_json"): "TEXT",
+    ("clips", "event_mode"): "TEXT",
 }
 
 
@@ -342,6 +343,7 @@ class SqliteRepo:
         hashtags: list[str] | None = None,
         duration_seconds: float | None = None,
         weight: float | None = None,
+        event_mode: str | None = None,
     ) -> int:
         async with self._lock:
             db = await self._connect()
@@ -350,8 +352,8 @@ class SqliteRepo:
                 INSERT INTO clips (
                     session_id, channel_id, kind, status, signal_score,
                     breakdown_json, title, hook, hashtags, attribution_json,
-                    file_path, duration_seconds, weight, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    file_path, duration_seconds, weight, event_mode, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session_id,
@@ -367,6 +369,7 @@ class SqliteRepo:
                     file_path,
                     duration_seconds,
                     weight,
+                    event_mode,
                     utc_iso(),
                 ),
             )

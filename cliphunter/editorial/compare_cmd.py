@@ -196,7 +196,7 @@ def _spoken_lines(video: Path, *, model: str) -> list[Line]:
     except Exception as exc:
         print(f"compare: sin transcripción ({exc})", file=sys.stderr)
         return []
-    return [Line(start, end, text) for start, end, text in pieces]
+    return [Line(piece[0], piece[1], piece[2]) for piece in pieces]
 
 
 def _duration(video: Path, messages) -> float:

@@ -243,7 +243,7 @@ La transcripción no pasa por PyAV. ffmpeg saca PCM mono a 16 kHz y se le entreg
 pip install faster-whisper
 ```
 
-El veredicto es JSON: componentes, total reescalado de 0 a 100 si falta alguna señal, tramo, categoría, participantes, inicio de la preparación, payoff, final, hook, título y si aguanta una storyline. Por debajo de 65 no se corta, salvo que el editor diga qué storyline sostiene. El corte de ese momento se reencoda (`libx264` veryfast, aac, `+faststart`) entre frases, no con `-c copy` en el keyframe. Cada clip entra a Telegram en cuanto se corta, no en lote.
+El veredicto es JSON: componentes, total reescalado de 0 a 100 si falta alguna señal, tramo, categoría, participantes, inicio de la preparación, payoff, final, hook, título y si aguanta una storyline. Por debajo de 65 no se corta, salvo que el editor diga qué storyline sostiene. El corte de ese momento se reencoda (`libx264` veryfast, aac, `+faststart`) entre frases, no con `-c copy` en el keyframe. Empieza como mucho 0,3 s antes de la primera palabra dicha (la marca del segmento incluye el silencio de antes y no se usa). Después del corte, `silencedetect` quita el silencio que quede al inicio (más de 0,3 s) y el aire muerto del final (más de 0,6 s), salvo que la risa siga. Cada clip entra a Telegram en cuanto se corta, no en lote.
 
 En Telegram el mensaje lleva título, viral con desglose, categoría, participantes, por qué, hook e inicio y final. **Rechazar** pide un motivo: aburrido, mal cortado, sin contexto, repetido, otro. **Inicio ±5 s** y **Final ±5 s** siguen recortando el buffer. Un `r` suelto (la página local o una cola externa) rechaza igual, sin motivo, para no romper esa integración.
 

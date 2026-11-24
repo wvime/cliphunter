@@ -209,7 +209,7 @@ class AppConfig(BaseModel):
     buffer_dir: Path = Field(default_factory=default_buffer_dir)
     buffer_minutes: int = Field(default=10, ge=1, le=180)
     segment_seconds: int = Field(default=4, ge=2, le=15)
-    quality: list[str] = Field(default_factory=lambda: ["480p", "720p"])
+    quality: list[str] = Field(default_factory=lambda: ["720p", "best", "480p"])
     poll_interval_seconds: int = Field(default=45, ge=15, le=300)
     skip_authorization_prompt: bool = False
     metrics_interval_seconds: int = Field(default=15, ge=5, le=300)
@@ -236,8 +236,16 @@ class AppConfig(BaseModel):
     editorial_after_seconds: float = Field(default=30, ge=0, le=120)
     editorial_sweep_seconds: float = Field(default=30, ge=5, le=300)
     editorial_min_score: float = Field(default=65, ge=0, le=100)
+    editorial_story_floor: float = Field(default=50, ge=0, le=100)
+    editorial_resample: bool = True
+    editorial_resample_low: float = Field(default=58, ge=0, le=100)
+    editorial_resample_high: float = Field(default=72, ge=0, le=100)
+    editorial_reaction_cap: float = Field(default=4, ge=0, le=30)
     editorial_max_seconds: float = Field(default=60, ge=15, le=180)
     editorial_story_max_seconds: float = Field(default=120, ge=15, le=300)
+    review_archive_hours: float = Field(default=36, ge=1, le=240)
+    review_archive_margin_seconds: float = Field(default=20, ge=0, le=120)
+    event_mode: str | None = None
     title_style: TitleStyle = Field(default_factory=TitleStyle)
     database_path: Path | None = None
     clips_dir: Path | None = None

@@ -66,12 +66,45 @@ def normalize_category(value: str | None) -> str | None:
     return CATEGORIES.get(key)
 
 
-def should_keep(total: float | None, *, storyline: bool, storyline_note: str | None, minimum: float = 65) -> bool:
+def storyline_is_known(note: str | None, known: list[str] | None) -> bool:
+    """The note has to cite a storyline or relationship that is actually stored."""
+
+    if not note or not known:
+        return False
+    folded = fold_note(note)
+    for item in known:
+        text = fold_note(item)
+        if len(text) < 4:
+            continue
+        if text in folded or folded in text:
+            return True
+    return False
+
+
+def fold_note(text: str) -> str:
+    import unicodedata
+
+    normalized = unicodedata.normalize("NFKD", text)
+    stripped = "".join(char for char in normalized if not unicodedata.combining(char))
+    return " ".join(stripped.casefold().split())
+
+
+def should_keep(
+    total: float | None,
+    *,
+    storyline: bool,
+    storyline_note: str | None,
+    minimum: float = 65,
+    floor: float = 50,
+    known_storylines: list[str] | None = None,
+) -> bool:
     if total is None:
         return False
     if total >= minimum:
         return True
-    return bool(storyline and (storyline_note or "").strip())
+    if total < floor or not storyline:
+        return False
+    return storyline_is_known(storyline_note, known_storylines)
 
 
 def component_dict(raw: dict[str, Any] | None) -> dict[str, float | None]:

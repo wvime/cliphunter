@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS clips (
     duration_seconds REAL,
     weight REAL,
     review_claimed INTEGER NOT NULL DEFAULT 0,
+    event_mode TEXT,
     created_at TEXT NOT NULL,
     CHECK (kind IN ('manual', 'auto')),
     CHECK (status IN ('pending', 'ready', 'failed', 'approved', 'rejected'))

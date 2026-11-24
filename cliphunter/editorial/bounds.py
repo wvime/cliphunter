@@ -6,10 +6,31 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
+class Word:
+    start: float
+    end: float
+    text: str
+
+
+@dataclass(frozen=True)
 class Line:
     start: float
     end: float
     text: str
+    words: tuple[Word, ...] = ()
+
+
+TOPIC_MARKERS = (
+    "bienvenido",
+    "bienvenida",
+    "aqui tenemos",
+    "aquí tenemos",
+    "llego",
+    "llegó",
+    "el siguiente",
+    "con nosotros",
+)
+LAUGHTER = ("jaja", "jeje", "jiji", "risa")
 
 
 def clip_bounds(
@@ -22,40 +43,128 @@ def clip_bounds(
     max_seconds: float = 60,
     story_max_seconds: float = 120,
     storyline: bool = False,
+    payoff_quote: str | None = None,
+    lead_in: float = 0.3,
+    tail: float = 0.5,
+    reaction_cap: float = 4.0,
 ) -> tuple[float, float, float]:
-    """Return ``(start, end, payoff)`` on line edges.
+    """Return ``(start, end, payoff)`` tight around the spoken words.
 
-    The start is the beginning of the setup sentence. The end is the end of
-    the line that holds the reaction. A storyline may run past ``max_seconds``
-    up to ``story_max_seconds``.
+    The start is at most ``lead_in`` before the first spoken word of the
+    setup sentence. Segment starts are ignored when word times exist, because
+    those starts include the pause before anyone talks. The payoff quote is
+    kept whole. The end is about ``tail`` after the last reaction word, and
+    trailing talk is capped unless the laugh is still going.
     """
 
+    cap = story_max_seconds if storyline else max_seconds
     if not lines:
-        start = setup
-        stop = max(end, setup + min_seconds)
-        cap = story_max_seconds if storyline else max_seconds
+        start = setup - lead_in
+        stop = max(end, setup) + tail
         if stop - start > cap:
-            stop = start + cap
+            start = stop - cap
         return start, stop, payoff
     ordered = sorted(lines, key=lambda line: line.start)
-    start_line = _covering(ordered, setup) or ordered[0]
-    end_line = _covering(ordered, end) or ordered[-1]
-    start = start_line.start
-    stop = max(end_line.end, start)
-    if payoff < start:
-        payoff = start
-    cap = story_max_seconds if storyline else max_seconds
+    setup_line = _covering(ordered, setup) or ordered[0]
+    payoff_line = _quote_line(ordered, payoff_quote) or _covering(ordered, payoff) or setup_line
+    end_line = _covering(ordered, end) or payoff_line
+    if end_line.end < payoff_line.end:
+        end_line = payoff_line
+    start = _start_at_first_word(setup_line, lead_in)
+    reaction_end = _last_word_end(end_line) + tail
+    stop = max(reaction_end, _last_word_end(payoff_line) + tail)
+    stop = _cap_trailing(ordered, end_line, stop, reaction_cap, tail)
+    topic = _topic_cut(ordered, payoff_line.end)
+    if topic is not None:
+        stop = min(stop, topic)
+    stop = max(stop, _last_word_end(payoff_line) + tail)
     if stop - start < min_seconds:
-        stop, start = _extend(ordered, start, stop, min_seconds)
-    if stop - start < min_seconds:
-        # More video after the last line, not invented dialogue.
-        stop += min_seconds - (stop - start)
+        start = _extend_backward(ordered, start, stop, min_seconds, lead_in)
+    anchor = _start_at_first_word(setup_line, lead_in)
+    if start < anchor:
+        start = anchor
     if stop - start > cap:
-        stop = start + cap
-        stop = _end_of_line_at_or_before(ordered, stop, start)
+        start = max(anchor, stop - cap)
+        if stop - start > cap:
+            stop = start + cap
     if stop <= start:
         stop = start + min(min_seconds, cap)
-    return start, stop, payoff
+    return start, stop, payoff_line.start
+
+
+def _last_word_end(line: Line) -> float:
+    if line.words:
+        return max(word.end for word in line.words)
+    return line.end
+
+
+def _first_spoken(line: Line) -> float:
+    """Word time when we have one. A segment start still contains the pause."""
+
+    spoken = [word.start for word in line.words if word.text.strip()]
+    if spoken:
+        return min(spoken)
+    return line.start
+
+
+def _start_at_first_word(setup: Line, lead_in: float) -> float:
+    return _first_spoken(setup) - lead_in
+
+
+def _quote_line(lines: list[Line], quote: str | None) -> Line | None:
+    if not quote:
+        return None
+    from cliphunter.editorial.names import fold
+
+    needle = fold(quote)
+    if len(needle) < 4:
+        return None
+    for line in lines:
+        if needle in fold(line.text):
+            return line
+    return None
+
+
+def _topic_cut(lines: list[Line], after: float) -> float | None:
+    from cliphunter.editorial.names import fold
+
+    for line in lines:
+        if line.start <= after + 0.05:
+            continue
+        text = fold(line.text)
+        if text.endswith("?") or text.startswith("¿") or "?" in text[:24]:
+            return line.start - 0.05
+        if any(marker in text for marker in TOPIC_MARKERS):
+            return line.start - 0.05
+    return None
+
+
+def _cap_trailing(lines: list[Line], reaction: Line, stop: float, reaction_cap: float, tail: float) -> float:
+    from cliphunter.editorial.names import fold
+
+    limit = _last_word_end(reaction) + reaction_cap
+    for line in lines:
+        if line.start <= reaction.end:
+            continue
+        if line.start > limit:
+            break
+        if any(token in fold(line.text) for token in LAUGHTER):
+            limit = max(limit, _last_word_end(line) + tail)
+    return min(stop, limit)
+
+
+def _extend_backward(lines: list[Line], start: float, stop: float, minimum: float, lead_in: float) -> float:
+    if stop - start >= minimum:
+        return start
+    earlier = [line for line in lines if _first_spoken(line) < start]
+    cursor = start
+    for line in reversed(earlier):
+        if _topic_cut([line], line.start - 1) is not None:
+            break
+        cursor = _start_at_first_word(line, lead_in)
+        if stop - cursor >= minimum:
+            break
+    return cursor
 
 
 def _covering(lines: list[Line], t: float) -> Line | None:
