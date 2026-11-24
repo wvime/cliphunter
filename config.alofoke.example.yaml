@@ -1,0 +1,72 @@
+# Ejemplo real: Alofoke Radio Show (YouTube).
+# Copia este archivo a config.yaml para usarlo. config.yaml está en .gitignore.
+# No pongas claves de API aquí; van en .env.
+#
+# Nombres adaptados al esquema de ClipHunter:
+#   settings.*        -> las mismas claves en la raíz
+#   poll_interval_s   -> poll_interval_seconds
+# El id "alofoke" es la clave del canal: --canal alofoke y la carpeta youtube_alofoke.
+# authorization (tipo, fuente, fecha) es opcional. Si está, el clip lo copia
+# en el JSON de atribución y en attribution_json.
+
+max_concurrent_streams: 2
+buffer_dir: "C:\\cliphunter\\buffer"
+buffer_minutes: 10
+segment_seconds: 4
+quality: "720p,best,480p"
+poll_interval_seconds: 45
+# Detección automática (modo principal). El atajo de abajo es solo un extra.
+auto_clip: true
+signal_window_seconds: 10
+signal_interval_seconds: 2
+clip_min_seconds: 15
+clip_max_seconds: 45
+clip_target_seconds: 30
+hotkey: "ctrl+alt+c"
+hotkey_seconds: 45
+hotkey_debounce_seconds: 3
+# Con dos directos, el atajo corta este. Si solo hay uno, da igual.
+active_channel: alofoke
+title_style:
+  box_color: white
+  text_color: black
+  highlight_color: yellow
+  highlight_mode: background
+  font: "Montserrat Black"
+  font_file: assets/fonts/Montserrat-Black.ttf
+  corner_radius: 16
+  title_format: "*{sujeto}*"
+  renderer: ass
+
+channels:
+  - id: alofoke
+    platform: youtube
+    url: "https://www.youtube.com/@Alofokeradioshow"
+    authorized: true
+    # Solo registro interno (attribution_json). No se copia al .txt de publicación.
+    credit: "🎙️ @Alofokeradioshow"
+    authorization:
+      tipo: "permiso público del creador"
+      fuente: "https://www.instagram.com/p/DekQ6nYKdhy/"
+      fecha: "2026-11-17"
+    context:
+      idioma: es
+      nicho: "radio show / entretenimiento, reality TV"
+      buen_clip: "chistes, risas, artistas, influencers, burlas, caídas, peleas, momentos virales de reality"
+      evitar: "contenido sexual explícito, datos personales, violencia grave"
+    weights:
+      chat: 0.35
+      emotes: 0.25
+      audio: 0.30
+      scene: 0.05
+      viewers: 0.05
+    thresholds:
+      signal_score: 2.5
+      cooldown_s: 45
+    emotes_hype:
+      - "😂"
+      - "🤣"
+      - "💀"
+      - "🔥"
+      - "JAJAJA"
+      - "jajaja"
