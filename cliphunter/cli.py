@@ -77,6 +77,24 @@ def build_parser() -> argparse.ArgumentParser:
     calibrate.add_argument("--config", default="config.yaml")
     calibrate.add_argument("--apply", action="store_true", help="Guarda la sugerencia en calibration.json.")
     calibrate.add_argument("--canal", default=None, help="Limita la sugerencia a un canal.")
+
+    participants = sub.add_parser("participants", help="Ficha de participantes y storylines.")
+    participants_sub = participants.add_subparsers(dest="participants_command")
+    imported = participants_sub.add_parser("import", help="Importa un JSON de participantes.")
+    imported.add_argument("json_path")
+    imported.add_argument("--config", default="config.yaml")
+
+    metrics = sub.add_parser("metrics", help="Resultados de publicación.")
+    metrics_sub = metrics.add_subparsers(dest="metrics_command")
+    metrics_import = metrics_sub.add_parser("import", help="Importa un CSV de retención, shares y comentarios.")
+    metrics_import.add_argument("csv_path")
+    metrics_import.add_argument("--config", default="config.yaml")
+
+    compare = sub.add_parser("compare", help="Compara el selector de señales con el editor.")
+    compare.add_argument("archivo", nargs="?", default=None)
+    compare.add_argument("--chat", default=None)
+    compare.add_argument("--out", default=None)
+    compare.add_argument("--config", default="config.yaml")
     return parser
 
 
@@ -104,6 +122,14 @@ def main(argv: list[str] | None = None) -> int:
             return replay_command(args)
         if args.command == "calibrate":
             return calibrate_command(Path(args.config), apply=bool(args.apply), canal=args.canal)
+        if args.command == "participants":
+            return _cmd_participants(args)
+        if args.command == "metrics":
+            return _cmd_metrics(args)
+        if args.command == "compare":
+            from cliphunter.editorial.compare_cmd import compare_command
+
+            return compare_command(args)
     except (AuthorizationRequired, ConfigError, ClipError) as exc:
         print(str(exc), file=sys.stderr)
         return 2 if not isinstance(exc, ClipError) else 1
@@ -196,6 +222,48 @@ async def _cmd_clip(args: argparse.Namespace) -> int:
         path=str(result.path),
         actual_seconds=result.attribution.get("actual_seconds"),
     )
+    return 0
+
+
+def _cmd_participants(args: argparse.Namespace) -> int:
+    if getattr(args, "participants_command", None) != "import":
+        print("Usa: python -m cliphunter participants import archivo.json", file=sys.stderr)
+        return 2
+    from cliphunter.editorial.io import import_participants
+
+    config = load_config(Path(args.config))
+    repo = SqliteRepo(config.resolved_database_path())
+
+    async def _run() -> int:
+        await repo.init()
+        try:
+            return await import_participants(Path(args.json_path), repo)
+        finally:
+            await repo.close()
+
+    count = asyncio.run(_run())
+    print(f"Participantes importados: {count}")
+    return 0
+
+
+def _cmd_metrics(args: argparse.Namespace) -> int:
+    if getattr(args, "metrics_command", None) != "import":
+        print("Usa: python -m cliphunter metrics import archivo.csv", file=sys.stderr)
+        return 2
+    from cliphunter.editorial.io import import_metrics
+
+    config = load_config(Path(args.config))
+    repo = SqliteRepo(config.resolved_database_path())
+
+    async def _run() -> int:
+        await repo.init()
+        try:
+            return await import_metrics(Path(args.csv_path), repo)
+        finally:
+            await repo.close()
+
+    count = asyncio.run(_run())
+    print(f"Filas de publicación importadas: {count}")
     return 0
 
 

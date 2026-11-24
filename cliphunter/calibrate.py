@@ -11,7 +11,8 @@ import json
 from pathlib import Path
 
 from cliphunter.config import AppConfig, channel_key, load_config
-from cliphunter.signals.aggregate import DEFAULT_WEIGHTS, canonical_weights, channel_threshold
+from cliphunter.editorial.feedback import summarize_feedback
+from cliphunter.signals.aggregate import canonical_weights, channel_threshold
 from cliphunter.signals.nudge import calibration_path, load_nudges
 from cliphunter.storage.repo import SqliteRepo
 
@@ -92,19 +93,26 @@ def calibrate_command(config_path: Path, *, apply: bool = False, canal: str | No
     config = load_config(config_path)
     repo = SqliteRepo(config.resolved_database_path())
 
-    async def _load() -> tuple[list[dict], list[dict]]:
+    async def _load() -> tuple[list[dict], list[dict], list[dict]]:
         await repo.init()
         try:
-            return await repo.list_clips(), await repo.list_decisions()
+            return await repo.list_clips(), await repo.list_decisions(), await repo.list_publish_results()
         finally:
             await repo.close()
 
-    clips, decisions = asyncio.run(_load())
+    clips, decisions, published = asyncio.run(_load())
     grouped = records_from_rows(clips, decisions)
     if canal:
         wanted = {canal, canal.lstrip("@")}
         grouped = {key: rows for key, rows in grouped.items() if key in wanted or key.endswith("_" + canal)}
-    if not grouped:
+    learned = summarize_feedback(decisions, published, minimum=config.editorial_min_score)
+    print(f"editorial: mínimo {config.editorial_min_score:g} -> {learned['minimum']:g}")
+    if learned["reasons"]:
+        rendered = ", ".join(f"{name} {count}" for name, count in learned["reasons"].items())
+        print(f"editorial: razones de rechazo: {rendered}")
+    for note in learned["notes"]:
+        print(f"editorial: {note}")
+    if not grouped and not learned["reasons"] and not published:
         print("calibrate: no hay decisiones con breakdown todavía.")
         return 0
     overrides = load_nudges(calibration_path(config.resolved_database_path()))
@@ -134,7 +142,17 @@ def calibrate_command(config_path: Path, *, apply: bool = False, canal: str | No
 
         merged = load_nudges(path)
         merged.update(applied)
-        atomic_write_json(path, {"channels": merged})
+        atomic_write_json(
+            path,
+            {
+                "channels": merged,
+                "editorial": {
+                    "minimum": learned["minimum"],
+                    "notes": learned["notes"],
+                    "reasons": learned["reasons"],
+                },
+            },
+        )
         print(f"calibrate: aplicado en {path}")
     return 0
 

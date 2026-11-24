@@ -139,6 +139,16 @@ async def run_app(
             channels=plan.channels,
             on_moment=review.wake,
         )
+        from cliphunter.editorial.runtime import EditorialDirector, editorial_active
+
+        if editorial_active(config, env):
+            auto.editorial = EditorialDirector(config, env, repo, auto)
+            log_event(
+                "INFO",
+                "editorial.enabled",
+                model=config.editorial_model,
+                claude=bool(env.anthropic_api_key),
+            )
         auto_task = asyncio.create_task(
             _auto_loop(auto, manager, plan.channels, config, stop),
             name="auto-clip",

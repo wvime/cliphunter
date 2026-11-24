@@ -51,11 +51,16 @@ def _card(item: dict[str, Any]) -> str:
     caption = build_caption(item).replace("&", "&amp;").replace("<", "&lt;")
     buttons = [
         ("a", "Aprobar"),
+        ("is", "Inicio -5 s"),
+        ("ie", "Inicio +5 s"),
+        ("fs", "Final -5 s"),
+        ("fe", "Final +5 s"),
+        ("why:aburrido", "aburrido"),
+        ("why:mal_cortado", "mal cortado"),
+        ("why:sin_contexto", "sin contexto"),
+        ("why:repetido", "repetido"),
+        ("why:otro", "otro"),
         ("r", "Rechazar"),
-        ("is", "Ajustar -5s inicio"),
-        ("ie", "Ajustar +5s inicio"),
-        ("fs", "Ajustar -5s fin"),
-        ("fe", "Ajustar +5s fin"),
     ]
     forms = []
     for code, label in buttons:

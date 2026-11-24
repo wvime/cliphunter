@@ -1,19 +1,20 @@
-"""Optional transcript of the last 60 s. Never blocks the cut.
+"""Optional transcript. Never blocks the cut.
 
-faster-whisper is imported only when a moment fires. CPU int8. If the
-package is missing, clipping continues and the log says so once.
+Audio is decoded with ffmpeg to 16 kHz mono PCM and passed to
+faster-whisper as a float array. Giving the library a media path goes
+through PyAV, which fails on the owner's Windows install
+(``open() got an unexpected keyword argument 'metadata_errors'``).
 """
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
+from cliphunter.clip import probe_duration
+from cliphunter.editorial.audio import read_pcm, s16le_to_floats, transcribe_samples, whisper_available
 from cliphunter.jsonlog import log_event
 
 _warned = False
-_model = None
-_model_name = ""
 
 
 async def transcribe_clip(
@@ -22,10 +23,8 @@ async def transcribe_clip(
     model_name: str = "base",
     seconds: float = 60.0,
 ) -> str | None:
-    global _warned, _model, _model_name
-    try:
-        from faster_whisper import WhisperModel
-    except ImportError:
+    global _warned
+    if not whisper_available():
         if not _warned:
             _warned = True
             log_event(
@@ -34,45 +33,22 @@ async def transcribe_clip(
                 message="faster-whisper no está instalado; el clip se corta igual",
             )
         return None
-    wav = media.with_suffix(".whisper.wav")
     try:
-        await _extract(media, wav, seconds)
-        if _model is None or _model_name != model_name:
-            _model = await asyncio.to_thread(
-                WhisperModel, model_name, "cpu", compute_type="int8"
-            )
-            _model_name = model_name
-        segments, _info = await asyncio.to_thread(
-            lambda: _model.transcribe(str(wav), vad_filter=True)
+        probed = probe_duration(media)
+        start = None
+        if probed and probed > seconds:
+            start = probed - seconds
+        pcm = await read_pcm(media, start=start, duration=seconds)
+        import asyncio
+
+        pieces = await asyncio.to_thread(
+            transcribe_samples,
+            s16le_to_floats(pcm),
+            model_name=model_name,
+            language="es",
         )
-        text = " ".join(segment.text.strip() for segment in segments).strip()
+        text = " ".join(piece[2] for piece in pieces).strip()
         return text or None
     except Exception as exc:
         log_event("WARNING", "transcript.failed", error=str(exc))
         return None
-    finally:
-        wav.unlink(missing_ok=True)
-
-
-async def _extract(media: Path, wav: Path, seconds: float) -> None:
-    process = await asyncio.create_subprocess_exec(
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-threads",
-        "1",
-        "-sseof",
-        f"-{seconds}",
-        "-i",
-        str(media),
-        "-ac",
-        "1",
-        "-ar",
-        "16000",
-        "-y",
-        str(wav),
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
-    await process.wait()

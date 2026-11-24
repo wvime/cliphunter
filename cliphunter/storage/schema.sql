@@ -57,6 +57,9 @@ CREATE TABLE IF NOT EXISTS decisions (
     note TEXT,
     weight REAL,
     breakdown_json TEXT,
+    reason TEXT,
+    category TEXT,
+    participants_json TEXT,
     created_at TEXT NOT NULL,
     CHECK (action IN ('approve', 'reject', 'adjust'))
 );
@@ -68,6 +71,63 @@ CREATE TABLE IF NOT EXISTS metrics (
     rss_mb REAL,
     extra_json TEXT,
     sampled_at TEXT NOT NULL
+);
+
+-- Editorial memory. Old databases get the new decision columns from
+-- _COLUMN_PATCHES in repo.py. These tables are created on the next init.
+-- verified = 1 is a sourced fact. verified = 0 is a rumor and must stay labeled.
+
+CREATE TABLE IF NOT EXISTS participants (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    persona TEXT,
+    source TEXT,
+    verified INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS participant_nicknames (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    participant_id INTEGER NOT NULL REFERENCES participants(id),
+    nickname TEXT NOT NULL,
+    source TEXT,
+    verified INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS relationships (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    left_name TEXT NOT NULL,
+    right_name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    detail TEXT,
+    source TEXT,
+    verified INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS storylines (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    detail TEXT,
+    participants_json TEXT,
+    source TEXT,
+    verified INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS publish_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    clip_id INTEGER,
+    platform TEXT,
+    retention REAL,
+    shares REAL,
+    comments REAL,
+    replay_rate REAL,
+    source TEXT,
+    raw_json TEXT,
+    imported_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_channel ON sessions(channel_id, started_at);

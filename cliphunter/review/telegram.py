@@ -11,7 +11,7 @@ from typing import Any
 import httpx
 
 from cliphunter.jsonlog import log_event
-from cliphunter.review.messages import build_caption, parse_callback, review_keyboard
+from cliphunter.review.messages import build_caption, parse_callback, reason_keyboard, review_keyboard
 from cliphunter.review.preview import preview_file
 from cliphunter.review.state import TelegramState, load_state, save_state
 
@@ -144,12 +144,26 @@ class TelegramNotifier:
             await self._answer(query_id, "Acción desconocida.")
             return
         code, clip_id = parsed
+        if code == "ask":
+            await self._reasons(int(state.chat_id), clip_id)
+            await self._answer(query_id, "Elige el motivo.")
+            return
         try:
             await self.apply_action(clip_id, code)
             await self._answer(query_id, "Hecho.")
         except Exception as exc:
             log_event("ERROR", "telegram.action_failed", error=str(exc), clip_id=clip_id)
             await self._answer(query_id, "No se pudo aplicar.")
+
+    async def _reasons(self, chat_id: int, clip_id: int) -> None:
+        await self._transport(
+            "sendMessage",
+            json_body={
+                "chat_id": str(chat_id),
+                "text": "¿Por qué lo rechazas?",
+                "reply_markup": reason_keyboard(clip_id),
+            },
+        )
 
     async def _answer(self, query_id: str | None, text: str) -> None:
         if not query_id:

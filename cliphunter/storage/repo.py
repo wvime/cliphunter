@@ -19,6 +19,9 @@ _COLUMN_PATCHES = {
     ("clips", "review_claimed"): "INTEGER NOT NULL DEFAULT 0",
     ("decisions", "weight"): "REAL",
     ("decisions", "breakdown_json"): "TEXT",
+    ("decisions", "reason"): "TEXT",
+    ("decisions", "category"): "TEXT",
+    ("decisions", "participants_json"): "TEXT",
 }
 
 
@@ -102,6 +105,9 @@ class Repo(Protocol):
         note: str | None = None,
         weight: float | None = None,
         breakdown: dict[str, Any] | None = None,
+        reason: str | None = None,
+        category: str | None = None,
+        participants: list[str] | None = None,
     ) -> int: ...
 
     async def get_clip(self, clip_id: int) -> dict[str, Any] | None: ...
@@ -378,14 +384,18 @@ class SqliteRepo:
         note: str | None = None,
         weight: float | None = None,
         breakdown: dict[str, Any] | None = None,
+        reason: str | None = None,
+        category: str | None = None,
+        participants: list[str] | None = None,
     ) -> int:
         async with self._lock:
             db = await self._connect()
             cursor = await db.execute(
                 """
                 INSERT INTO decisions (
-                    clip_id, action, adjust_seconds, note, weight, breakdown_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    clip_id, action, adjust_seconds, note, weight, breakdown_json,
+                    reason, category, participants_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     clip_id,
@@ -394,6 +404,9 @@ class SqliteRepo:
                     note,
                     weight,
                     _dumps(breakdown) if breakdown is not None else None,
+                    reason,
+                    category,
+                    _dumps(participants) if participants is not None else None,
                     utc_iso(),
                 ),
             )
@@ -526,3 +539,164 @@ class SqliteRepo:
                 )
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
+
+    async def upsert_participant(
+        self,
+        *,
+        name: str,
+        description: str | None = None,
+        persona: str | None = None,
+        source: str | None = None,
+        verified: bool = False,
+        nicknames: list[str] | None = None,
+    ) -> int:
+        now = utc_iso()
+        async with self._lock:
+            db = await self._connect()
+            await db.execute(
+                """
+                INSERT INTO participants (name, description, persona, source, verified, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(name) DO UPDATE SET
+                    description=COALESCE(excluded.description, participants.description),
+                    persona=COALESCE(excluded.persona, participants.persona),
+                    source=COALESCE(excluded.source, participants.source),
+                    verified=excluded.verified
+                """,
+                (name.strip(), description, persona, source, 1 if verified else 0, now),
+            )
+            cursor = await db.execute("SELECT id FROM participants WHERE name = ?", (name.strip(),))
+            row = await cursor.fetchone()
+            if row is None:
+                raise RuntimeError(f"participant {name} disappeared after upsert")
+            participant_id = int(row["id"])
+            for nickname in nicknames or []:
+                text = nickname.strip()
+                if not text:
+                    continue
+                await db.execute(
+                    """
+                    INSERT INTO participant_nicknames (participant_id, nickname, source, verified)
+                    SELECT ?, ?, ?, ?
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM participant_nicknames
+                        WHERE participant_id = ? AND nickname = ?
+                    )
+                    """,
+                    (participant_id, text, source, 1 if verified else 0, participant_id, text),
+                )
+            await db.commit()
+            return participant_id
+
+    async def list_participants(self) -> list[dict[str, Any]]:
+        async with self._lock:
+            db = await self._connect()
+            cursor = await db.execute("SELECT * FROM participants ORDER BY name")
+            people = [dict(row) for row in await cursor.fetchall()]
+            cursor = await db.execute("SELECT * FROM participant_nicknames ORDER BY id")
+            nicknames = [dict(row) for row in await cursor.fetchall()]
+        by_id: dict[int, list[str]] = {}
+        for nick in nicknames:
+            by_id.setdefault(int(nick["participant_id"]), []).append(str(nick["nickname"]))
+        for person in people:
+            person["nicknames"] = by_id.get(int(person["id"]), [])
+        return people
+
+    async def add_relationship(
+        self,
+        *,
+        left_name: str,
+        right_name: str,
+        kind: str,
+        detail: str | None = None,
+        source: str | None = None,
+        verified: bool = False,
+    ) -> int:
+        async with self._lock:
+            db = await self._connect()
+            cursor = await db.execute(
+                """
+                INSERT INTO relationships (
+                    left_name, right_name, kind, detail, source, verified, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (left_name.strip(), right_name.strip(), kind.strip(), detail, source, 1 if verified else 0, utc_iso()),
+            )
+            await db.commit()
+            return int(cursor.lastrowid or 0)
+
+    async def list_relationships(self) -> list[dict[str, Any]]:
+        async with self._lock:
+            db = await self._connect()
+            cursor = await db.execute("SELECT * FROM relationships ORDER BY id")
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def add_storyline(
+        self,
+        *,
+        title: str,
+        detail: str | None = None,
+        participants: list[str] | None = None,
+        source: str | None = None,
+        verified: bool = False,
+    ) -> int:
+        async with self._lock:
+            db = await self._connect()
+            cursor = await db.execute(
+                """
+                INSERT INTO storylines (
+                    title, detail, participants_json, source, verified, active, created_at
+                ) VALUES (?, ?, ?, ?, ?, 1, ?)
+                """,
+                (title.strip(), detail, _dumps(participants or []), source, 1 if verified else 0, utc_iso()),
+            )
+            await db.commit()
+            return int(cursor.lastrowid or 0)
+
+    async def list_storylines(self) -> list[dict[str, Any]]:
+        async with self._lock:
+            db = await self._connect()
+            cursor = await db.execute("SELECT * FROM storylines WHERE active = 1 ORDER BY id")
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def add_publish_result(
+        self,
+        *,
+        clip_id: int | None,
+        platform: str | None,
+        retention: float | None,
+        shares: float | None,
+        comments: float | None,
+        replay_rate: float | None,
+        source: str | None = None,
+        raw: dict[str, Any] | None = None,
+    ) -> int:
+        async with self._lock:
+            db = await self._connect()
+            cursor = await db.execute(
+                """
+                INSERT INTO publish_results (
+                    clip_id, platform, retention, shares, comments, replay_rate,
+                    source, raw_json, imported_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    clip_id,
+                    platform,
+                    retention,
+                    shares,
+                    comments,
+                    replay_rate,
+                    source,
+                    _dumps(raw) if raw is not None else None,
+                    utc_iso(),
+                ),
+            )
+            await db.commit()
+            return int(cursor.lastrowid or 0)
+
+    async def list_publish_results(self) -> list[dict[str, Any]]:
+        async with self._lock:
+            db = await self._connect()
+            cursor = await db.execute("SELECT * FROM publish_results ORDER BY id")
+            return [dict(row) for row in await cursor.fetchall()]

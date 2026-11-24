@@ -21,6 +21,9 @@ poll_interval_seconds: 45
 # El modo principal es automático: cada 2 s se puntúa una ventana de 10 s.
 # El atajo solo es un extra. --no-hotkey lo apaga y la detección sigue.
 auto_clip: true
+# auto: el editor entra solo si hay ANTHROPIC_API_KEY. off lo deja en señales.
+editorial: auto
+editorial_model: claude-haiku-4-5
 signal_window_seconds: 10
 signal_interval_seconds: 2
 baseline_minutes: 10

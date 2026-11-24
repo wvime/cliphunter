@@ -230,6 +230,14 @@ class AppConfig(BaseModel):
     hysteresis: float = Field(default=0.65, gt=0, le=1)
     transcript_on_trigger: bool = True
     whisper_model: str = "base"
+    editorial: Literal["auto", "on", "off"] = "auto"
+    editorial_model: str = "claude-haiku-4-5"
+    editorial_before_seconds: float = Field(default=90, ge=10, le=300)
+    editorial_after_seconds: float = Field(default=30, ge=0, le=120)
+    editorial_sweep_seconds: float = Field(default=30, ge=5, le=300)
+    editorial_min_score: float = Field(default=65, ge=0, le=100)
+    editorial_max_seconds: float = Field(default=60, ge=15, le=180)
+    editorial_story_max_seconds: float = Field(default=120, ge=15, le=300)
     title_style: TitleStyle = Field(default_factory=TitleStyle)
     database_path: Path | None = None
     clips_dir: Path | None = None

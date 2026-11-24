@@ -58,6 +58,14 @@ def clip_row_to_item(row: dict[str, Any]) -> dict[str, Any]:
         "clip_start": attribution.get("clip_start"),
         "clip_end": attribution.get("clip_end"),
         "signal_score": score,
+        "viral_score": attribution.get("viral_score"),
+        "tier": attribution.get("tier"),
+        "title": row.get("title") or attribution.get("title"),
+        "hook": row.get("hook") or attribution.get("hook"),
+        "category": attribution.get("category"),
+        "participants": attribution.get("participants") or [],
+        "why": attribution.get("why"),
+        "editorial_mode": attribution.get("editorial_mode"),
         "breakdown": breakdown if isinstance(breakdown, dict) and breakdown else None,
         "credit": attribution.get("credit"),
         "attribution": attribution,
@@ -183,8 +191,14 @@ class ReviewRuntime:
         if code == "a":
             await self.approve(clip_id)
             return
+        if code == "ask":
+            return
         if code == "r":
             await self.reject(clip_id)
+            return
+        if code.startswith("why:"):
+            reason = code.split(":", 1)[1]
+            await self.reject(clip_id, reason=reason)
             return
         if code not in ADJUST_OPS:
             raise ValueError(f"acción desconocida: {code}")
@@ -201,9 +215,16 @@ class ReviewRuntime:
             raise FileNotFoundError(f"no está el clip {source}")
         self.ready_dir.mkdir(parents=True, exist_ok=True)
         dest = self.ready_dir / source.name
-        shutil.copy2(source, dest)
+        rendered = False
+        if attribution.get("editorial_mode") == "editorial":
+            rendered = await self._render_vertical(source, dest, attribution, row)
+        if not rendered:
+            if dest.exists():
+                dest.unlink()
+            shutil.copy2(source, dest)
         dest.with_suffix(".txt").write_text(ready_sidecar_text(attribution), encoding="utf-8")
         breakdown = _breakdown(row, attribution)
+        participants = attribution.get("participants") if isinstance(attribution.get("participants"), list) else None
         await self.repo.insert_decision(
             clip_id=clip_id,
             action="approve",
@@ -211,15 +232,18 @@ class ReviewRuntime:
             note="review",
             weight=row.get("weight"),
             breakdown=breakdown,
+            category=attribution.get("category"),
+            participants=participants,
         )
         attribution["ready_path"] = str(dest)
         await self.repo.update_clip(clip_id, status="approved", attribution=attribution)
         log_event("INFO", "review.approved", clip_id=clip_id, ready=str(dest))
         return dest
 
-    async def reject(self, clip_id: int) -> None:
+    async def reject(self, clip_id: int, reason: str | None = None) -> None:
         row = await self._require(clip_id)
         attribution = _loads(row.get("attribution_json"))
+        participants = attribution.get("participants") if isinstance(attribution.get("participants"), list) else None
         await self.repo.insert_decision(
             clip_id=clip_id,
             action="reject",
@@ -227,9 +251,43 @@ class ReviewRuntime:
             note="review",
             weight=row.get("weight"),
             breakdown=_breakdown(row, attribution),
+            reason=reason,
+            category=attribution.get("category"),
+            participants=participants,
         )
         await self.repo.update_clip(clip_id, status="rejected")
-        log_event("INFO", "review.rejected", clip_id=clip_id)
+        log_event("INFO", "review.rejected", clip_id=clip_id, reason=reason)
+
+    async def _render_vertical(self, source: Path, dest: Path, attribution: dict[str, Any], row: dict[str, Any]) -> bool:
+        from cliphunter.editorial.bounds import Line
+        from cliphunter.editorial.vertical import render_vertical
+        from cliphunter.timeutil import parse_iso
+
+        try:
+            lines = [
+                Line(float(item["start"]), float(item["end"]), str(item.get("text") or ""))
+                for item in (attribution.get("transcript_lines") or [])
+                if isinstance(item, dict)
+            ]
+            clip_start = 0.0
+            if attribution.get("clip_start"):
+                clip_start = parse_iso(str(attribution["clip_start"])).timestamp()
+            await render_vertical(
+                source,
+                dest,
+                title=str(attribution.get("title") or ""),
+                sujeto=attribution.get("sujeto"),
+                lines=lines,
+                clip_start=clip_start,
+                duration=float(row.get("duration_seconds") or attribution.get("actual_seconds") or 30),
+                style=self.config.title_style,
+            )
+            return True
+        except Exception as exc:
+            log_event("WARNING", "editorial.vertical_failed", error=str(exc))
+            if dest.exists():
+                dest.unlink()
+            return False
 
     async def adjust(self, clip_id: int, edge: str, delta: float) -> None:
         row = await self._require(clip_id)

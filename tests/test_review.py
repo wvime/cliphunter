@@ -106,11 +106,12 @@ def test_caption_keyboard_and_sidecar():
     assert labels == [
         "Aprobar",
         "Rechazar",
-        "Ajustar -5s inicio",
-        "Ajustar +5s inicio",
-        "Ajustar -5s fin",
-        "Ajustar +5s fin",
+        "Inicio -5 s",
+        "Inicio +5 s",
+        "Final -5 s",
+        "Final +5 s",
     ]
+    assert parse_callback("why:4:aburrido") == ("why:aburrido", 4)
     assert parse_callback("is:4") == ("is", 4)
     text = ready_sidecar_text(
         {
@@ -289,7 +290,8 @@ async def test_local_page_approves(tmp_path: Path):
         home = client.get("/")
         assert home.status_code == 200
         assert "Aprobar" in home.text
-        assert "Ajustar -5s fin" in home.text
+        assert "Final -5 s" in home.text
+        assert "aburrido" in home.text
         response = client.post("/decision", data={"clip_id": str(clip_id), "op": "a"}, follow_redirects=False)
         assert response.status_code == 303
         row = await repo.get_clip(clip_id)

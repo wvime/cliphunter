@@ -81,6 +81,7 @@ class AutoClipEngine:
         self.channels = {_key(channel): channel for channel in channels}
         self.min_baseline_samples = min_baseline_samples
         self.on_moment = on_moment
+        self.editorial = None
         self._states: dict[str, _ChannelRuntime] = {}
 
     def ensure(self, view: LiveView) -> _ChannelRuntime:
@@ -126,6 +127,11 @@ class AutoClipEngine:
     async def tick(self, view: LiveView, now: float) -> ScoreTick | None:
         state = self.ensure(view)
         await self._poll_live(state, now)
+        if self.editorial is not None:
+            try:
+                await self.editorial.poll(state, now)
+            except Exception as exc:
+                log_event("ERROR", "editorial.poll_failed", channel=view.channel_key, error=str(exc))
         if now < state.cooldown_until:
             return None
         window = await self._window(state, now)
@@ -187,8 +193,18 @@ class AutoClipEngine:
             peak = state.peak_tick or tick
             state.peak_tick = None
             state.tracker.reset()
-            state.cooldown_until = now + channel_cooldown(view.thresholds)
-            await self._cut(state, samples, peak)
+            handled = False
+            if self.editorial is not None:
+                try:
+                    handled = await self.editorial.on_fire(state, samples, peak, now)
+                except Exception as exc:
+                    log_event("ERROR", "editorial.fire_failed", channel=view.channel_key, error=str(exc))
+                    handled = False
+            if not handled:
+                state.cooldown_until = now + channel_cooldown(view.thresholds)
+                await self._cut(state, samples, peak)
+            elif state.cooldown_until < now + 1:
+                state.cooldown_until = now + float(self.config.editorial_after_seconds) + 2
         return tick
 
     async def learn_from_decisions(self) -> None:
@@ -321,6 +337,9 @@ class AutoClipEngine:
             "degraded": tick.degraded,
             "peak": peak,
         }
+        mode = getattr(state, "editorial_mode", None)
+        if mode:
+            breakdown["mode"] = mode
         output = self.config.resolved_clips_dir() / f"{state.view.channel_key}_auto_{int(peak)}.mp4"
         try:
             result = await create_clip(

@@ -145,7 +145,7 @@ La app pide sola el token de cliente. Sin esas variables, el canal de Twitch no 
 
 Kick implementa la misma interfaz `Platform`, pero `check_live` responde `kick_not_implemented`. No graba, aunque pongas `authorized: true`. La API pública de Kick no es estable y queda para otra fase.
 
-`ANTHROPIC_API_KEY` y `TELEGRAM_BOT_TOKEN` se leen para las fases siguientes y **no se usan** en la fase 1. El scorer de Claude está en `cliphunter/scoring.py` y lanza `NotImplementedError`. El token de Telegram será el bot de Approve / Reject / Adjust.
+`TELEGRAM_BOT_TOKEN` es el bot de revisión. `ANTHROPIC_API_KEY` enciende el editor (Dominican Reality Viral Director). Sin esa clave el corte sigue siendo el de señales. `cliphunter/scoring.py` sigue lanzando `NotImplementedError`; el juez nuevo está en `cliphunter/editorial/`.
 
 ## Grabar
 
@@ -230,6 +230,35 @@ python -m cliphunter replay archivo.mp4 --chat chat.json --cut
 ```
 
 El JSON es una lista de `{ "t": 12.5, "text": "JAJAJA" }` (también valen `ts`/`offset` y `message`). `--cut` escribe mp4 con `-c copy` en la carpeta de clips. Sirve para calibrar sin estar en directo. El chat del replay no lleva audio ni escena: esas señales se marcan degradadas.
+
+## Editor (Dominican Reality Viral Director)
+
+El modo principal sigue siendo automático. Si hay `ANTHROPIC_API_KEY`, `editorial: auto` (el defecto) pone delante un editor: las señales solo nominan un momento. Sin esa clave, el corte sigue siendo el de señales y el breakdown queda marcado `signal-only`. No se inventan título, categoría ni participantes.
+
+Qué mira el editor: una transcripción con marcas de tiempo del buffer (faster-whisper, CPU, int8, español, VAD), pistas de risa, preguntas, nombres de la ficha y quiebres de tono, y un barrido periódico para que un chiste callado también entre. El modelo barato por defecto es `editorial_model` (`claude-haiku-4-5`). El prompt está en `cliphunter/editorial/prompts/director_v1.md`.
+
+La transcripción no pasa por PyAV. ffmpeg saca PCM mono a 16 kHz y se le entrega un array a faster-whisper. En Windows, PyAV revienta con `open() got an unexpected keyword argument 'metadata_errors'`.
+
+```powershell
+pip install faster-whisper
+```
+
+El veredicto es JSON: componentes, total reescalado de 0 a 100 si falta alguna señal, tramo, categoría, participantes, inicio de la preparación, payoff, final, hook, título y si aguanta una storyline. Por debajo de 65 no se corta, salvo que el editor diga qué storyline sostiene. El corte de ese momento se reencoda (`libx264` veryfast, aac, `+faststart`) entre frases, no con `-c copy` en el keyframe. Cada clip entra a Telegram en cuanto se corta, no en lote.
+
+En Telegram el mensaje lleva título, viral con desglose, categoría, participantes, por qué, hook e inicio y final. **Rechazar** pide un motivo: aburrido, mal cortado, sin contexto, repetido, otro. **Inicio ±5 s** y **Final ±5 s** siguen recortando el buffer. Un `r` suelto (la página local o una cola externa) rechaza igual, sin motivo, para no romper esa integración.
+
+Al aprobar un clip editorial se intenta un vertical 9:16 en `listos_para_subir`: subtítulos en español dominicano sacados de la transcripción real, y la caja blanca con Montserrat Black y el sujeto en amarillo. El `.txt` lleva título, hook, hashtags, score, categoría, participantes, por qué y las marcas de tiempo. El crédito del canal no entra ahí. Si el render falla, se copia el mp4 preciso y se avisa en el log.
+
+Ficha y resultados:
+
+```powershell
+python -m cliphunter participants import participantes.json
+python -m cliphunter metrics import resultados.csv
+python -m cliphunter calibrate --config config.yaml
+python -m cliphunter compare alfombra.mp4 --chat chat.json --out reporte.md
+```
+
+El JSON de participantes es una lista de `{ "nombre", "apodos", "descripcion", "fuente" }`. Cada fila queda como rumor hasta que `verificado` sea verdadero. No se inventan relaciones. El CSV admite `clip_id, platform, retention, shares, comments, replay_rate`. `calibrate` imprime qué cambió el umbral editorial y, con `--apply`, lo guarda en `calibration.json`. `compare` pone lado a lado el selector viejo y el nuevo. Sin faster-whisper el reporte usa el chat. Con la clave, llama a Claude. La auditoría de por qué el selector viejo falla está en `docs/editorial-audit.md`. Las tablas nuevas y las columnas de `decisions` se crean al abrir la base; el detalle está en `docs/schema-editorial.md`.
 
 ## Atajo de teclado
 
@@ -362,25 +391,26 @@ Eventos ya publicados: `stream.start`, `stream.end`, `segment.ready`, `clip.crea
 | `config`, `bus`, `storage`, `watcher`, `ingest`, `clip`, `hotkey`, `observability` | Implementado |
 | YouTube y Twitch (`platforms/`) | Implementado |
 | Kick (`platforms/kick.py`) | Stub, misma interfaz |
-| `signals/` | Chat, emotes, audio, escena, viewers, corte automático |
-| `calibrate`, `replay` | Implementados. `calibrate --apply` escribe `calibration.json` |
-| `scoring.py` (`ClaudeScorer`) | Interfaz. No hay llamadas a Anthropic |
-| `review/` | Telegram (@clipowii_bot) y página local en `127.0.0.1`. El 9:16 y Claude siguen después |
-| `processing/` | El 9:16 no se renderiza. `title_style` ya describe la caja del título |
+| `signals/` | Chat, emotes, audio, escena, viewers. Sin clave, esto sigue cortando |
+| `editorial/` | Juez, transcripción rodante, corte preciso, 9:16 al aprobar, compare |
+| `calibrate`, `replay`, `compare` | Implementados. `calibrate --apply` escribe `calibration.json` |
+| `scoring.py` (`ClaudeScorer`) | Sigue sin usarse. El juez editorial llama a Claude por httpx |
+| `review/` | Telegram (@clipowii_bot), motivos de rechazo y página local en `127.0.0.1` |
+| `processing/` | `title_style` describe la caja. Al aprobar un clip editorial se quema en el 9:16 |
 
 Las tablas `clips` (`kind` manual\|auto, `signal_score`, `weight`, `breakdown_json`, `title`, `hook`, `hashtags`) y `decisions` (`weight`, `breakdown_json`) guardan el corte y la decisión. El atajo pesa 3. El scorer de Claude las reutilizará.
 
 ## Hoja de ruta
 
-1. **Corte automático** (esta fase): chat, emotes, audio, escena y viewers, sin LLM. El atajo sigue disponible como extra.
-2. **Revisión por Telegram**: ya está. Aprobar, rechazar y ajustar ±5 s escriben en `decisions` y mueven el umbral.
-3. **`calibrate` y `replay`**: ya están, para ajustar pesos con las decisiones y para ensayar sobre un VOD.
-4. **Scorer con Claude**, usando el `moment.candidate` (incluida la transcripción si faster-whisper está instalado), `context`, `weights` y `thresholds`. El título, el hook y los hashtags del clip salen de ahí.
-5. **Procesado pesado solo al aprobar**: reencuadre 9:16, subtítulos y título quemado. El estilo ya está en `title_style` (caja blanca redondeada arriba, texto negro en negrita, nombre de `{sujeto}` en amarillo). La fuente por defecto es **Montserrat Black** (licencia OFL), incluida en `assets/fonts/Montserrat-Black.ttf`. `font` y `font_file` se pueden cambiar; ffmpeg y ASS recibirán la ruta absoluta de ese `.ttf`, así que no hace falta instalar la fuente en Windows. `{sujeto}` lo devolverá Claude. Hoy no se dibuja.
+1. **Corte automático por señales**: sigue activo cuando no hay clave. El atajo es un extra.
+2. **Editor**: transcripción rodante, juez Claude, corte preciso y aprendizaje con rechazos y métricas de publicación. Ya está.
+3. **Revisión por Telegram**: aprobar, rechazar con motivo y ±5 s. Ya está.
+4. **9:16 al aprobar** un clip editorial: subtítulos reales y caja de título. Montserrat Black sigue en `assets/fonts/Montserrat-Black.ttf`.
+5. **Lo que falta**: hashtags y título que no salgan del juez, y un modelo de ranking más fino que el mínimo que mueve `calibrate`.
 
 ## Limitaciones conocidas
 
-- El corte cae en el keyframe / segmento, no en el segundo exacto. Puede sobrar hasta un segmento (~4 s, a veces más si el GOP es largo).
+- El corte por señales cae en el keyframe / segmento, no en el segundo exacto. Puede sobrar hasta un segmento (~4 s, a veces más si el GOP es largo). El corte editorial se reencoda entre frases.
 - El segmento abierto (el que ffmpeg está escribiendo) no se incluye. El borde del directo queda fuera unos segundos.
 - La detección de YouTube depende de la página pública `/live`. No gasta cuota en el sondeo; `videos.list` cuesta 1 unidad solo como último recurso para el título.
 - Algunos codecs no entran en mp4 con `-c copy`. En ese caso el clip falla en vez de recodificar.
